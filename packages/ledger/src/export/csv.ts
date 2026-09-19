@@ -36,13 +36,42 @@ export const RUN_CSV_HEADER =
 export const ENTRIES_CSV_HEADER =
   'direction,token,amount,amount_base6,amount_native18,counterparty,tx_hash,log_index,memo_id,memo_index,source_type,source_id,block_number,block_time_utc,fee_usdc,note,explorer_url';
 
-/** RFC 4180 quoting plus a spreadsheet formula-injection guard. */
-export function csvEscape(v: string | number | bigint | null | undefined): string {
+type CsvCell = string | number | bigint | null | undefined;
+
+/**
+ * RFC 4180 quoting only: wraps a cell in quotes and doubles internal quotes when it contains a
+ * comma, quote, or newline. No formula-injection guard here — this is the function applied
+ * uniformly to every cell (via `toCsvLine`), including computed numeric/enum/hash cells, where a
+ * leading '-' is a real negative amount and must never be turned into a guarded text cell.
+ */
+export function csvEscape(v: CsvCell): string {
   if (v === null || v === undefined) return '';
-  let s = String(v);
-  if (/^[=+\-@\t\r]/.test(s)) s = `'${s}`;
+  const s = String(v);
   return /[",\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
 }
+
+/**
+ * Spreadsheet formula-injection guard for free-text fields only (reference, exception reason,
+ * note — never a computed numeric/enum/hash cell): prefixes a leading apostrophe when the raw
+ * value would otherwise be interpreted as a formula or command by Excel/Sheets/LibreOffice
+ * (leading `=`, `+`, `-`, `@`, tab, or CR). Apply this to a free-text value before placing it in
+ * the cell array passed to `toCsvLine` — `toCsvLine` still applies the one, uniform RFC 4180
+ * quoting pass on top via `csvEscape`, so callers must not quote here themselves.
+ */
+export function csvText(v: string | null | undefined): string {
+  if (v === null || v === undefined) return '';
+  return /^[=+\-@\t\r]/.test(v) ? `'${v}` : v;
+}
+
+/**
+ * Joins cell values into one RFC 4180 CSV line, applying `csvEscape` to every cell exactly once.
+ * Free-text cells (reference, exception reason, note) must be pre-processed with `csvText` before
+ * being included here so the formula-injection guard lands only on those columns.
+ */
+export function toCsvLine(cells: CsvCell[]): string {
+  return cells.map((c) => csvEscape(c)).join(',');
+}
+
 const iso = (t?: number) => (t === undefined || t === 0 ? '' : new Date(t * 1000).toISOString());
 
 export function runFooter(r: RunReport) {
@@ -70,10 +99,10 @@ export function runToCsv(r: RunReport): string {
   const lines = [RUN_CSV_HEADER];
   for (const x of r.rows) {
     lines.push(
-      [
+      toCsvLine([
         r.runId,
         x.rowIndex,
-        csvEscape(x.reference),
+        csvText(x.reference),
         x.recipient,
         r.token,
         format6(x.amount6),
@@ -88,15 +117,13 @@ export function runToCsv(r: RunReport): string {
         iso(x.blockTime),
         x.feeRowNative18 === undefined ? '' : formatNative18(x.feeRowNative18),
         x.feeChunkNative18 === undefined ? '' : formatNative18(x.feeChunkNative18),
-        csvEscape(x.exceptionReason),
+        csvText(x.exceptionReason),
         x.explorerUrl ?? (x.txHash ? explorerTxUrl(r.chainId, x.txHash) : ''),
-      ]
-        .map((c) => (typeof c === 'string' && c.startsWith('"') ? c : csvEscape(c)))
-        .join(','),
+      ]),
     );
   }
   lines.push('');
-  for (const [k, v] of Object.entries(runFooter(r))) lines.push(`${k},${csvEscape(String(v))}`);
+  for (const [k, v] of Object.entries(runFooter(r))) lines.push(toCsvLine([k, v]));
   return lines.join('\n');
 }
 
@@ -107,7 +134,7 @@ export function entriesToCsv(
   const lines = [ENTRIES_CSV_HEADER];
   for (const e of entries) {
     lines.push(
-      [
+      toCsvLine([
         e.direction,
         e.token,
         format6(e.amount6),
@@ -123,24 +150,20 @@ export function entriesToCsv(
         e.blockNumber,
         iso(e.blockTime),
         formatNative18(e.feeNative18),
-        csvEscape(e.note),
+        csvText(e.note),
         explorerTxUrl(meta.chainId, e.txHash),
-      ]
-        .map((c) => (typeof c === 'string' && c.startsWith('"') ? c : csvEscape(c)))
-        .join(','),
+      ]),
     );
   }
   const out = entries.filter((e) => e.direction === 'out').reduce((s, e) => s + e.amount6, 0n);
   const inn = entries.filter((e) => e.direction === 'in').reduce((s, e) => s + e.amount6, 0n);
   const fees = entries.reduce((s, e) => s + e.feeNative18, 0n);
-  lines.push(
-    '',
-    `entries,${entries.length}`,
-    `total_out,${format6(out)}`,
-    `total_in,${format6(inn)}`,
-    `total_fees_usdc,${formatNative18(fees)}`,
-    `chain_id,${meta.chainId}`,
-    `generated_at,${meta.generatedAt}`,
-  );
+  lines.push('');
+  lines.push(toCsvLine(['entries', entries.length]));
+  lines.push(toCsvLine(['total_out', format6(out)]));
+  lines.push(toCsvLine(['total_in', format6(inn)]));
+  lines.push(toCsvLine(['total_fees_usdc', formatNative18(fees)]));
+  lines.push(toCsvLine(['chain_id', meta.chainId]));
+  lines.push(toCsvLine(['generated_at', meta.generatedAt]));
   return lines.join('\n');
 }
