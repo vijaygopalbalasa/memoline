@@ -19,5 +19,6 @@ scripts/testnet/.env
 .vercel
 .turbo
 
-# SDD scratch (ledger, briefs, review packages)
-.superpowers/
+# scripts workspace output
+scripts/testnet/out/
+scripts/mainnet/out/
