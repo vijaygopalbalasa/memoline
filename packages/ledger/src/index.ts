@@ -12,6 +12,8 @@ export * from './chain/fees.js';
 export * from './chain/params.js';
 export * from './chain/topics.js';
 export * from './errors.js';
+export * from './export/csv.js';
+export * from './export/json.js';
 export * from './memo/data.js';
 export * from './memo/ids.js';
 export * from './money/amount.js';
