@@ -156,13 +156,14 @@ export function mapRevert(
   }
 }
 
-function errText(e: unknown): string {
+/** Collects shortMessage/message/details from an error and recursively from `.cause` (bounded depth: viem wraps errors several levels deep, e.g. TransactionExecutionError -> RpcRequestError -> HttpRequestError). */
+function errText(e: unknown, depth = 0): string {
   if (typeof e === 'string') return e;
-  if (e && typeof e === 'object') {
-    const o = e as { message?: unknown; details?: unknown; shortMessage?: unknown };
-    return [o.shortMessage, o.message, o.details].filter((x) => typeof x === 'string').join(' | ');
-  }
-  return String(e);
+  if (!e || typeof e !== 'object' || depth >= 5) return depth === 0 ? String(e) : '';
+  const o = e as { message?: unknown; details?: unknown; shortMessage?: unknown; cause?: unknown };
+  const parts = [o.shortMessage, o.message, o.details].filter((x): x is string => typeof x === 'string');
+  if (o.cause !== undefined && o.cause !== null) parts.push(errText(o.cause, depth + 1));
+  return parts.filter((s) => s.length > 0).join(' | ');
 }
 function errCode(e: unknown): number | undefined {
   if (e && typeof e === 'object') {
@@ -182,9 +183,14 @@ export function mapRpcError(e: unknown, ctx: { chunkRows?: number } = {}): Ledge
     return ledgerError('RPC_RATE_LIMITED', text);
   if (code === 4444 || /pruned history/i.test(text)) return ledgerError('RPC_HISTORY_UNAVAILABLE', text);
   if (code === -32602 && /range/i.test(text)) return ledgerError('RPC_RANGE_TOO_LARGE', text);
-  if (/status:\s*403|error code:\s*1010/i.test(text)) return ledgerError('RPC_FORBIDDEN', text);
-  if (code === -32003 || /out of gas|gas limit/i.test(text)) {
+  if (code === 403 || /status:\s*403|error code:\s*1010/i.test(text))
+    return ledgerError('RPC_FORBIDDEN', text);
+  // GAS_CAP_EXCEEDED only when the numeric RPC code is -32003 (Arc returns -32003 for both a real
+  // out-of-gas and the EIP-7825 per-tx cap); chunkRows disambiguates. A text-only "out of gas" mention
+  // without that numeric code (e.g. a genuine revert) is always TX_REVERTED, never the cap.
+  if (code === -32003) {
     return ledgerError((ctx.chunkRows ?? 0) >= 10 ? 'GAS_CAP_EXCEEDED' : 'TX_REVERTED', text);
   }
+  if (/out of gas|gas limit/i.test(text)) return ledgerError('TX_REVERTED', text);
   return ledgerError('UNKNOWN', text);
 }

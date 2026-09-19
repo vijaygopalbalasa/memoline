@@ -73,6 +73,24 @@ describe('mapRpcError', () => {
       'RPC_FORBIDDEN',
     );
   });
+  it('maps a numeric status: 403 (no text pattern) to RPC_FORBIDDEN', () => {
+    expect(mapRpcError({ status: 403, message: 'Forbidden' }).code).toBe('RPC_FORBIDDEN');
+  });
+  it('walks a nested .cause to find the matching status', () => {
+    expect(
+      mapRpcError({ message: 'request failed', cause: { status: 429, message: 'Too Many Requests' } }).code,
+    ).toBe('RPC_RATE_LIMITED');
+  });
+  it('does not treat a text-only "out of gas" mention as the gas cap without the numeric -32003 code', () => {
+    expect(
+      mapRpcError({ code: -32000, message: 'execution reverted: out of gas' }, { chunkRows: 80 }).code,
+    ).toBe('TX_REVERTED');
+  });
+  it('finds a doubly-nested -32003 cause and still applies the chunkRows disambiguation', () => {
+    expect(
+      mapRpcError({ cause: { cause: { code: -32003, message: 'out of gas' } } }, { chunkRows: 80 }).code,
+    ).toBe('GAS_CAP_EXCEEDED');
+  });
   it('unknown errors become UNKNOWN with the original message in detail', () => {
     const e = mapRpcError(new Error('weird'));
     expect(e.code).toBe('UNKNOWN');
