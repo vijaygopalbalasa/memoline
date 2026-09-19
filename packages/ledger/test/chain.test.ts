@@ -15,11 +15,10 @@ import {
 describe('chain constants', () => {
   it('has both networks with checksummed addresses and sources', () => {
     for (const id of [5042, 5042002] as const) {
-      const a = ADDRESSES[id];
-      for (const key of ['usdc', 'eurc', 'memo', 'multicall3From', 'multicall3', 'systemEmitter'] as const) {
-        expect(getAddress(a[key].address)).toBe(a[key].address);
-        expect(a[key].source).toMatch(/^https:\/\//);
-        expect(a[key].checked).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+      for (const [key, entry] of Object.entries(ADDRESSES[id])) {
+        expect(getAddress(entry.address), key).toBe(entry.address);
+        expect(entry.source, key).toMatch(/^https:\/\//);
+        expect(entry.checked, key).toMatch(/^\d{4}-\d{2}-\d{2}$/);
       }
     }
     expect(ADDRESSES[5042].usdc.address).toBe('0x3600000000000000000000000000000000000000');
@@ -30,16 +29,37 @@ describe('chain constants', () => {
   it('topics match the documented hashes', () => {
     expect(TOPICS.memo).toBe('0xeb15ee720798341c37739df41be53acfbbf70ae6802dade35457beec6e47a5e4');
     expect(TOPICS.transfer).toBe('0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef');
-    expect(TOPICS.beforeMemo).toBe(toEventSelector('BeforeMemo(uint256)'));
+    // Independently computed via `cast keccak "BeforeMemo(uint256)"`, not derived from toEventSelector.
+    expect(TOPICS.beforeMemo).toBe('0xb252e055da754c72fbf7542cf424b190808a9b541e912894c5e15b4238c41501');
   });
 
   it('ABIs expose the verified selectors', () => {
     expect(toFunctionSelector('aggregate3((address,bool,bytes)[])')).toBe('0x82ad56cb');
     const agg = multicall3FromAbi.find((f) => f.type === 'function' && f.name === 'aggregate3');
-    expect(agg).toBeDefined();
-    const memo = memoAbi.find((f) => f.type === 'function' && f.name === 'memo');
-    expect(memo).toBeDefined();
+    if (!agg) throw new Error('aggregate3 not found in multicall3FromAbi');
+    expect(toFunctionSelector(agg)).toBe('0x82ad56cb');
+
     expect(toFunctionSelector('memo(address,bytes,bytes32,bytes)')).toBe('0xc3b2c4f8');
+    const memoFn = memoAbi.find(
+      (f): f is Extract<(typeof memoAbi)[number], { type: 'function' }> =>
+        f.type === 'function' && f.name === 'memo',
+    );
+    if (!memoFn) throw new Error('memo not found in memoAbi');
+    expect(toFunctionSelector(memoFn)).toBe('0xc3b2c4f8');
+
+    const memoEvent = memoAbi.find(
+      (e): e is Extract<(typeof memoAbi)[number], { type: 'event'; name: 'Memo' }> =>
+        e.type === 'event' && e.name === 'Memo',
+    );
+    if (!memoEvent) throw new Error('Memo event not found in memoAbi');
+    expect(toEventSelector(memoEvent)).toBe(TOPICS.memo);
+
+    const beforeMemoEvent = memoAbi.find(
+      (e): e is Extract<(typeof memoAbi)[number], { type: 'event'; name: 'BeforeMemo' }> =>
+        e.type === 'event' && e.name === 'BeforeMemo',
+    );
+    if (!beforeMemoEvent) throw new Error('BeforeMemo event not found in memoAbi');
+    expect(toEventSelector(beforeMemoEvent)).toBe(TOPICS.beforeMemo);
   });
 
   it('clamps fees to the 20 Gwei floor', () => {

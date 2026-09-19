@@ -6,11 +6,16 @@ export async function assertContractsDeployed(
   client: Pick<PublicClient, 'getCode'>,
   chainId: ChainId,
 ): Promise<void> {
-  const missing: string[] = [];
-  for (const key of REQUIRED_CONTRACTS) {
-    const { address } = ADDRESSES[chainId][key];
-    const code = await client.getCode({ address });
-    if (!code || code === '0x') missing.push(`${key === 'memo' ? 'Memo' : key} @ ${address}`);
-  }
+  const checks = await Promise.all(
+    REQUIRED_CONTRACTS.map(async (key) => {
+      const { address } = ADDRESSES[chainId][key];
+      const code = await client.getCode({ address });
+      const deployed = Boolean(code) && code !== '0x';
+      return { key, address, deployed };
+    }),
+  );
+  const missing = checks
+    .filter((c) => !c.deployed)
+    .map((c) => `${c.key === 'memo' ? 'Memo' : c.key} @ ${c.address}`);
   if (missing.length) throw new Error(`Contracts not deployed on chain ${chainId}: ${missing.join(', ')}`);
 }
