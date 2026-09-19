@@ -317,16 +317,18 @@ async function main() {
     console.log('test6', results.test6_preflight);
   }
 
-  // ---- Test 7: EIP-7702 delegated sender (opt-out with SPIKE_SKIP_7702=1). Delegates to Multicall3, sends one memo, then revokes.
+  // ---- Test 7: EIP-7702 delegated sender (opt-out with SPIKE_SKIP_7702=1). Delegates to a codeless address, sends one memo, then revokes.
   if (process.env.SPIKE_SKIP_7702 !== '1') {
     const runId = newRunId();
     const row = makePayoutRow(runId, 0, spikeRecipient(0), 1n, 'SEVEN');
     const data = buildChunkCalldata(T.memo.address, T.usdc.address, { idx: 0, rows: [row] });
     const out: Record<string, unknown> = {};
     try {
+      // Delegate to a codeless address: the account carries a 7702 designator (what we test) without
+      // exposing any executable code to third parties while delegated.
       const auth = await walletClient.signAuthorization({
         account,
-        contractAddress: T.multicall3.address,
+        contractAddress: '0x000000000000000000000000000000000000dEaD',
         executor: 'self',
       });
       const hash = await walletClient.sendTransaction({
