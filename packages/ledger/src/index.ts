@@ -1,4 +1,6 @@
 export const LEDGER_VERSION = '0.1.0';
+export * from './batch/build.js';
+export * from './batch/chunk.js';
 export { memoAbi } from './chain/abis/memo.js';
 export { multicall3FromAbi } from './chain/abis/multicall3From.js';
 export * from './chain/addresses.js';
@@ -12,3 +14,4 @@ export * from './errors.js';
 export * from './memo/data.js';
 export * from './memo/ids.js';
 export * from './money/amount.js';
+export * from './wallet/classify.js';
