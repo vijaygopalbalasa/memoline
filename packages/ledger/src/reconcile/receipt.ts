@@ -158,7 +158,9 @@ export function reconcileReceipt(receipt: TransactionReceipt, ctx: ReceiptContex
       expectedCount,
       // A statement about chain data: the sum of what was actually transferred on-chain (decoded from
       // the matched Transfer logs) equals the sum of what the reconciled rows expected — not a
-      // comparison of our own expectation against itself.
+      // comparison of our own expectation against itself. Defense-in-depth: true by construction
+      // today, since the bracket filter above only accepts a transfer whose value exactly equals
+      // `expectedValue`; it exists to keep meaning this check if that filter is ever loosened.
       sumOk: sumExpected === sumMatchedOnChain,
       unexplainedTransfers,
       duplicateUsdcContractLogs,

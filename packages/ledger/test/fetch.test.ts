@@ -3,7 +3,14 @@ import { ADDRESSES, type FetchClient, fetchAddressLogs } from '../src/index.js';
 
 type Call = { from: bigint; to: bigint; address: string; eventName: string | undefined; args: unknown };
 
-function mockClient(o: { maxRange: bigint; failEvery?: number; failCode?: number; failMessage?: string }): {
+function mockClient(o: {
+  maxRange: bigint;
+  failEvery?: number;
+  failCode?: number;
+  failMessage?: string;
+  /** When set, every call throws exactly this, regardless of range or `failEvery`. */
+  alwaysThrow?: unknown;
+}): {
   client: FetchClient;
   calls: Call[];
 } {
@@ -25,6 +32,7 @@ function mockClient(o: { maxRange: bigint; failEvery?: number; failCode?: number
         eventName: p.event?.name,
         args: p.args,
       });
+      if (o.alwaysThrow !== undefined) throw o.alwaysThrow;
       if (o.failEvery && n % o.failEvery === 0) throw { status: 429, message: 'Too Many Requests' };
       if (p.toBlock - p.fromBlock + 1n > o.maxRange) {
         throw { code: o.failCode ?? -32602, message: o.failMessage ?? 'request exceeded max allowed range' };
@@ -146,6 +154,45 @@ describe('fetchAddressLogs adaptive paging', () => {
     });
     expect(logs).toEqual([]);
     expect(calls.length).toBeGreaterThan(1);
+  });
+
+  it('gives up immediately on RPC_FORBIDDEN (a Cloudflare 403) without treating it as halvable', async () => {
+    const { client, calls } = mockClient({
+      maxRange: 10n ** 9n,
+      alwaysThrow: { status: 403, message: 'Forbidden' },
+    });
+    await expect(
+      fetchAddressLogs(client, {
+        chainId: CHAIN,
+        address: TARGET,
+        fromBlock: 0n,
+        toBlock: 999n,
+        sleepMs: 0,
+      }),
+    ).rejects.toThrow(/RPC_FORBIDDEN/);
+    // Not retryable: fails on the very first query, well before a retry loop or a page-size halve
+    // could run up the call count.
+    expect(calls.length).toBeLessThanOrEqual(3);
+  });
+
+  it('gives up with RPC_RATE_LIMITED once its own retry budget is exhausted, never halving the page', async () => {
+    const { client, calls } = mockClient({
+      maxRange: 10n ** 9n,
+      alwaysThrow: { status: 429, message: 'Too Many Requests' },
+    });
+    await expect(
+      fetchAddressLogs(client, {
+        chainId: CHAIN,
+        address: TARGET,
+        fromBlock: 0n,
+        toBlock: 999n,
+        sleepMs: 0,
+        maxAttempts: 3,
+      }),
+    ).rejects.toThrow(/RPC_RATE_LIMITED/);
+    // Every retry is in place: all calls share the same (from,to), never a smaller page.
+    const uniqueRanges = new Set(calls.map((c) => `${c.from}-${c.to}`));
+    expect(uniqueRanges.size).toBe(1);
   });
 
   it('rejects an inverted range', async () => {
