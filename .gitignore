@@ -18,3 +18,6 @@ scripts/testnet/.env
 *.log
 .vercel
 .turbo
+
+# SDD scratch (ledger, briefs, review packages)
+.superpowers/
