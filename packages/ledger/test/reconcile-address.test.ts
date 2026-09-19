@@ -85,7 +85,15 @@ describe('reconcileAddress', () => {
       ...l,
       data: `0x${(BigInt(l.data) + 7n).toString(16).padStart(64, '0')}` as `0x${string}`,
     };
-    const entries = reconcileAddress({ ...base, address: f.sender, logs: [dusty] as Log[] });
+    // No receipt for this tx: with one, reconcileAddress now reads the tx's real (non-dusty) logs
+    // straight off the receipt (see the memo-attachment fix below), which would mask this modified
+    // log entirely. Omitting the receipt exercises the fallback path, which uses `logs` as given.
+    const entries = reconcileAddress({
+      ...base,
+      address: f.sender,
+      logs: [dusty] as Log[],
+      receiptsByTx: new Map(),
+    });
     expect(entries[0]?.note).toMatch(/dust/);
   });
 
@@ -96,5 +104,33 @@ describe('reconcileAddress', () => {
       logs: [...f.receipt.logs].reverse() as Log[],
     });
     expect(entries.map((e) => e.logIndex)).toEqual([...entries.map((e) => e.logIndex)].sort((a, b) => a - b));
+  });
+
+  // `fetchAddressLogs` (the real caller against live data) only ever queries `Memo(sender)`, never
+  // `BeforeMemo` — so an address-scoped fetch alone can never satisfy `bracketFor`'s pairing and a
+  // memo would never attach. These two cases pin the fix: with the tx's receipt available,
+  // reconcileAddress reads the receipt's own full log set (which does carry BeforeMemo) instead of
+  // whatever subset of logs was passed in; without a receipt, it falls back to the passed-in logs
+  // and memos stay unattached (the documented truncation).
+  it('attaches memos from the receipt log set even when only Transfer logs were fetched', () => {
+    const emitter = ADDRESSES[5042002].systemEmitter.address;
+    const transfersOnly = f.receipt.logs.filter((x) => x.address.toLowerCase() === emitter.toLowerCase());
+    expect(transfersOnly.length).toBeGreaterThan(0);
+    const entries = reconcileAddress({ ...base, address: f.sender, logs: transfersOnly as Log[] });
+    expect(entries).toHaveLength(3);
+    expect(entries.every((e) => e.memoId !== null)).toBe(true);
+  });
+
+  it('leaves memoId null when only Transfer logs were fetched and no receipt is available', () => {
+    const emitter = ADDRESSES[5042002].systemEmitter.address;
+    const transfersOnly = f.receipt.logs.filter((x) => x.address.toLowerCase() === emitter.toLowerCase());
+    const entries = reconcileAddress({
+      ...base,
+      address: f.sender,
+      logs: transfersOnly as Log[],
+      receiptsByTx: new Map(),
+    });
+    expect(entries).toHaveLength(3);
+    expect(entries.every((e) => e.memoId === null)).toBe(true);
   });
 });

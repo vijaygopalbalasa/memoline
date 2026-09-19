@@ -15,6 +15,20 @@ export type AddressReconcileInput = {
 };
 const eq = (a: string, b: string) => a.toLowerCase() === b.toLowerCase();
 
+/** Dedups by (txHash, logIndex), same rule used to build `byTx` below. */
+function dedupeLogs(logs: Log[]): Log[] {
+  const seen = new Set<string>();
+  const out: Log[] = [];
+  for (const l of logs) {
+    if (l.transactionHash === null || l.logIndex === null || l.blockNumber === null) continue;
+    const key = `${l.transactionHash}:${l.logIndex}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(l);
+  }
+  return out;
+}
+
 /**
  * Import: build ledger entries for one address from raw logs (system-emitter + EURC Transfer logs, Memo logs).
  * Dedups by (txHash, logIndex), ignores USDC-contract duplicates (parseReceiptLogs never reads value from
@@ -36,8 +50,17 @@ export function reconcileAddress(input: AddressReconcileInput): LedgerEntry[] {
   }
 
   const out: LedgerEntry[] = [];
-  for (const [txHash, logs] of byTx) {
+  for (const [txHash, fetchedLogs] of byTx) {
     const receipt = input.receiptsByTx.get(txHash);
+    // `fetchAddressLogs` only ever queries `Memo(sender)`, never `BeforeMemo` — so the address-scoped
+    // fetched log set alone can never satisfy `bracketFor`'s BeforeMemo/Memo pairing, and memos would
+    // never attach for live data. When the tx's receipt is available, use its full log set instead: it
+    // carries BeforeMemo, every value transfer in the tx (transfers for other parties are filtered out
+    // below by the isFrom/isTo check, same as always), and the USDC-contract duplicate that
+    // `parseReceiptLogs` already ignores. Without a receipt (an anonymous import's receipt cap, or a
+    // caller that never fetched one), fall back to the fetched set — memos won't attach for those, which
+    // is the documented truncation.
+    const logs = receipt ? dedupeLogs(receipt.logs) : fetchedLogs;
     const paidByAddress = receipt ? eq(receipt.from, input.address) : false;
     const fee = receipt ? computeFeeNative18(receipt.gasUsed, receipt.effectiveGasPrice) : 0n;
     const txEntries: LedgerEntry[] = [];
