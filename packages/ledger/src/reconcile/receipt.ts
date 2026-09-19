@@ -3,7 +3,7 @@ import { buildTransferCalldata } from '../batch/build.js';
 import type { Chunk } from '../batch/chunk.js';
 import { ADDRESSES, type ChainId, type Token, tokenAddress } from '../chain/addresses.js';
 import { computeFeeNative18 } from '../chain/fees.js';
-import { SCALE_12 } from '../money/amount.js';
+import { fromNative18, SCALE_12 } from '../money/amount.js';
 import { allocateFee } from './fees.js';
 import { bracketFor, parseReceiptLogs } from './logs.js';
 import type { LedgerEntry, ReceiptReconciliation, RowOutcome } from './types.js';
@@ -61,6 +61,10 @@ export function reconcileReceipt(receipt: TransactionReceipt, ctx: ReceiptContex
   const rows: RowOutcome[] = [];
   const entries: LedgerEntry[] = [];
   const used = new Set<number>();
+  /** Sum of the matched transfers' actual on-chain values, in amount6 — chain data, kept separate
+   * from the rows' declared expectation so `sumOk` below is a real cross-check, not a comparison of
+   * `row.amount6` against itself. */
+  let sumMatchedOnChain = 0n;
 
   for (const row of ctx.chunk.rows) {
     const fail = (reason: string) => rows.push({ rowIndex: row.rowIndex, status: 'EXCEPTION', reason });
@@ -112,6 +116,7 @@ export function reconcileReceipt(receipt: TransactionReceipt, ctx: ReceiptContex
     }
     used.add(t.logIndex);
     rows.push({ rowIndex: row.rowIndex, status: 'RECONCILED' });
+    sumMatchedOnChain += isUsdc ? fromNative18(t.value).amount6 : t.value;
     entries.push({
       direction: 'out',
       token: ctx.token,
@@ -143,7 +148,6 @@ export function reconcileReceipt(receipt: TransactionReceipt, ctx: ReceiptContex
   const sumExpected = ctx.chunk.rows
     .filter((r) => rows.find((x) => x.rowIndex === r.rowIndex)?.status === 'RECONCILED')
     .reduce((s, r) => s + r.amount6, 0n);
-  const sumMatched = entries.reduce((s, e) => s + e.amount6, 0n);
 
   return {
     entries,
@@ -152,7 +156,10 @@ export function reconcileReceipt(receipt: TransactionReceipt, ctx: ReceiptContex
     checks: {
       matchedCount: entries.length,
       expectedCount,
-      sumOk: sumExpected === sumMatched,
+      // A statement about chain data: the sum of what was actually transferred on-chain (decoded from
+      // the matched Transfer logs) equals the sum of what the reconciled rows expected — not a
+      // comparison of our own expectation against itself.
+      sumOk: sumExpected === sumMatchedOnChain,
       unexplainedTransfers,
       duplicateUsdcContractLogs,
     },

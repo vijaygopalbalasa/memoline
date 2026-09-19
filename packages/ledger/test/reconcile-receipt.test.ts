@@ -1,4 +1,4 @@
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import fc from 'fast-check';
 import type { TransactionReceipt } from 'viem';
 import { describe, expect, it } from 'vitest';
@@ -151,14 +151,12 @@ describe('reconcileReceipt (USDC 3-row fixture)', () => {
   });
 });
 
+const EURC_FIXTURE_URL = new URL('./fixtures/receipt-eurc-2rows.json', import.meta.url);
+
 describe('reconcileReceipt (EURC fixture, if present)', () => {
-  it('uses the EURC contract log and no system-emitter value', () => {
-    let g: Fixture;
-    try {
-      g = load('receipt-eurc-2rows.json');
-    } catch {
-      return;
-    }
+  // Reports as skipped (not a vacuous green) when Task 7 hasn't produced this fixture yet.
+  it.skipIf(!existsSync(EURC_FIXTURE_URL))('uses the EURC contract log and no system-emitter value', () => {
+    const g = load('receipt-eurc-2rows.json');
     const r = reconcileReceipt(g.receipt, ctxOf(g, 'EURC'));
     expect(r.entries).toHaveLength(2);
     expect(r.entries[0]?.amountNative18).toBeNull();
