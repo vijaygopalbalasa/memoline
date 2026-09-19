@@ -131,12 +131,33 @@ const ZERO = '0x0000000000000000000000000000000000000000';
 const errorAbi = [
   { type: 'error', name: 'Error', inputs: [{ name: 'reason', type: 'string' }] },
   { type: 'error', name: 'Panic', inputs: [{ name: 'code', type: 'uint256' }] },
+  { type: 'error', name: 'MemoFailed', inputs: [{ name: 'returnData', type: 'bytes' }] },
 ] as const;
+
+/** `MemoFailed(bytes)` can in principle wrap another `MemoFailed(bytes)`; bound the unwrap so a
+ * pathological/malicious payload can't recurse forever. */
+const MAX_MEMO_FAILED_UNWRAP_DEPTH = 5;
 
 /** Map revert data from eth_call / receipts to a LedgerError. Never throws. */
 export function mapRevert(
   revertData: Hex | undefined,
   ctx: { recipient?: Address; blocklistedHint?: boolean },
+): LedgerError {
+  return mapRevertBounded(revertData, ctx, 0);
+}
+
+/**
+ * On Arc, when a nested call inside `Memo.memo` reverts, Memo reverts with its own custom error
+ * `MemoFailed(bytes returnData)` (selector 0xed1966a2, from circlefin/arc-node contracts/src/memo/IMemo.sol)
+ * wrapping the inner revert bytes — e.g. a blocklisted-recipient transfer inside a memo call surfaces as
+ * MemoFailed(Error("Blocked address")), not as the inner Error(string) directly. Unwrap it recursively
+ * (bounded) so the caller gets the real underlying reason. An empty inner payload falls through to the
+ * empty-data branch below, same as top-level empty revert data.
+ */
+function mapRevertBounded(
+  revertData: Hex | undefined,
+  ctx: { recipient?: Address; blocklistedHint?: boolean },
+  depth: number,
 ): LedgerError {
   if (ctx.recipient && ctx.recipient.toLowerCase() === ZERO) return ledgerError('ZERO_ADDRESS');
   if (!revertData || revertData === '0x')
@@ -145,10 +166,16 @@ export function mapRevert(
     const decoded = decodeErrorResult({ abi: errorAbi, data: revertData });
     if (decoded.errorName === 'Error') {
       const reason = String(decoded.args[0]).toLowerCase();
-      if (/blocklist|denylist|blacklist|denied/.test(reason)) return ledgerError('BLOCKLISTED', reason);
+      if (/blocklist|denylist|blacklist|denied|blocked/.test(reason))
+        return ledgerError('BLOCKLISTED', reason);
       if (/exceeds balance|insufficient|exceeds allowance/.test(reason))
         return ledgerError('INSUFFICIENT_BALANCE', reason);
       return ledgerError('TX_REVERTED', reason);
+    }
+    if (decoded.errorName === 'MemoFailed') {
+      if (depth >= MAX_MEMO_FAILED_UNWRAP_DEPTH)
+        return ledgerError('TX_REVERTED', 'MemoFailed nesting exceeded max unwrap depth');
+      return mapRevertBounded(decoded.args[0], ctx, depth + 1);
     }
     return ledgerError('TX_REVERTED', `Panic(${decoded.args[0]})`);
   } catch {

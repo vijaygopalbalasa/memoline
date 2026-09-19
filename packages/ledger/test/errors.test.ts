@@ -1,9 +1,16 @@
-import { encodeErrorResult, stringToHex } from 'viem';
+import { encodeErrorResult, type Hex, stringToHex } from 'viem';
 import { describe, expect, it } from 'vitest';
 import { isLedgerError, ledgerError, mapRevert, mapRpcError } from '../src/index.js';
 
 const errorAbi = [{ type: 'error', name: 'Error', inputs: [{ name: 'reason', type: 'string' }] }] as const;
 const panicAbi = [{ type: 'error', name: 'Panic', inputs: [{ name: 'code', type: 'uint256' }] }] as const;
+const memoFailedAbi = [
+  { type: 'error', name: 'MemoFailed', inputs: [{ name: 'returnData', type: 'bytes' }] },
+] as const;
+/** Real on-chain returnData from Spike 0 test 6b (Arc Testnet): MemoFailed(bytes) (selector 0xed1966a2,
+ * circlefin/arc-node IMemo.sol) wrapping Error("Blocked address") for a blocklisted recipient. */
+const REAL_MEMO_FAILED_BLOCKLISTED: Hex =
+  '0xed1966a20000000000000000000000000000000000000000000000000000000000000020000000000000000000000000000000000000000000000000000000000000006408c379a00000000000000000000000000000000000000000000000000000000000000020000000000000000000000000000000000000000000000000000000000000000f426c6f636b65642061646472657373000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000';
 
 describe('mapRevert', () => {
   it('maps Error(string) containing "blocklist"/"denylist"/"blacklist" to BLOCKLISTED', () => {
@@ -44,6 +51,26 @@ describe('mapRevert', () => {
     const e = mapRevert('0x', {});
     expect(e.message.length).toBeGreaterThan(10);
     expect(e.nextStep.length).toBeGreaterThan(10);
+  });
+
+  describe('MemoFailed unwrapping', () => {
+    it('unwraps the real on-chain MemoFailed(bytes) wrapping Error("Blocked address") to BLOCKLISTED', () => {
+      expect(mapRevert(REAL_MEMO_FAILED_BLOCKLISTED, {}).code).toBe('BLOCKLISTED');
+    });
+    it('unwraps MemoFailed wrapping an insufficient-balance Error(string) to INSUFFICIENT_BALANCE', () => {
+      const inner = encodeErrorResult({
+        abi: errorAbi,
+        errorName: 'Error',
+        args: ['ERC20: transfer amount exceeds balance'],
+      });
+      const wrapped = encodeErrorResult({ abi: memoFailedAbi, errorName: 'MemoFailed', args: [inner] });
+      expect(mapRevert(wrapped, {}).code).toBe('INSUFFICIENT_BALANCE');
+    });
+    it('unwraps MemoFailed wrapping empty inner bytes like empty revert data (honors blocklistedHint)', () => {
+      const wrapped = encodeErrorResult({ abi: memoFailedAbi, errorName: 'MemoFailed', args: ['0x'] });
+      expect(mapRevert(wrapped, { blocklistedHint: true }).code).toBe('BLOCKLISTED');
+      expect(mapRevert(wrapped, {}).code).toBe('TX_REVERTED');
+    });
   });
 });
 
