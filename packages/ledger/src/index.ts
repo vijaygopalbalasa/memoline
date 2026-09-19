@@ -8,3 +8,4 @@ export * from './chain/client.js';
 export * from './chain/fees.js';
 export * from './chain/params.js';
 export * from './chain/topics.js';
+export * from './money/amount.js';
