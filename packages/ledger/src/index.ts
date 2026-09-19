@@ -8,6 +8,7 @@ export * from './chain/client.js';
 export * from './chain/fees.js';
 export * from './chain/params.js';
 export * from './chain/topics.js';
+export * from './errors.js';
 export * from './memo/data.js';
 export * from './memo/ids.js';
 export * from './money/amount.js';
