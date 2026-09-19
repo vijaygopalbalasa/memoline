@@ -43,9 +43,20 @@ describe('memo data', () => {
   });
   it('rejects data over 256 bytes', () => {
     // Controller ruling: brief's ref: 'x'.repeat(300) hits the reference-charset check first
-    // (references are 1-64 chars), so it throws /reference/, not /256/. Exceed the byte limit
-    // with a long run id instead, and keep a separate assertion for the over-length reference.
-    expect(() => encodeMemoData({ v: 1, t: 'po', run: 'R'.repeat(300), row: 1, ref: 'x' })).toThrow(/256/);
+    // (references are 1-64 chars), so it throws /reference/, not /256/. run/link are also now
+    // charset-checked (max 64 chars), so push past the byte cap with max-length, charset-valid
+    // run/link/ref fields plus a large row instead, and keep a separate assertion for the
+    // over-length reference.
+    expect(() =>
+      encodeMemoData({
+        v: 1,
+        t: 'po',
+        run: 'R'.repeat(64),
+        row: Number.MAX_SAFE_INTEGER,
+        link: 'L'.repeat(64),
+        ref: 'F'.repeat(64),
+      }),
+    ).toThrow(/256/);
     expect(() => encodeMemoData({ v: 1, t: 'po', run: 'R', row: 1, ref: 'x'.repeat(300) })).toThrow(
       /reference/,
     );
@@ -56,11 +67,32 @@ describe('memo data', () => {
       /reference/,
     );
   });
+  it('rejects run/link ids with disallowed characters on encode (defense in depth)', () => {
+    expect(() => encodeMemoData({ v: 1, t: 'po', run: 'has space', row: 1 })).toThrow(/run/);
+    expect(() => encodeMemoData({ v: 1, t: 'pl', link: 'has space' })).toThrow(/link/);
+  });
   it('decode returns null for garbage, wrong version, or foreign JSON', () => {
     expect(decodeMemoData('0x')).toBeNull();
     expect(decodeMemoData(stringToHex('not json'))).toBeNull();
     expect(decodeMemoData(stringToHex('{"v":2,"t":"po"}'))).toBeNull();
     expect(decodeMemoData(stringToHex('{"hello":"world"}'))).toBeNull();
     expect(decodeMemoData('0xffff')).toBeNull();
+  });
+  it('decode returns null for a wrong-typed row (attacker-controlled bytes must not smuggle types)', () => {
+    expect(decodeMemoData(stringToHex('{"v":1,"t":"po","row":"3"}'))).toBeNull();
+  });
+  it('decode returns null for a ref with a disallowed charset', () => {
+    expect(decodeMemoData(stringToHex('{"v":1,"t":"po","ref":"alice@example.com"}'))).toBeNull();
+  });
+  it('decode returns null for a run id containing a space', () => {
+    expect(decodeMemoData(stringToHex('{"v":1,"t":"po","run":"has space"}'))).toBeNull();
+  });
+  it('decode drops unknown keys rather than passing them through', () => {
+    const hex = stringToHex('{"v":1,"t":"po","run":"RUN1","evil":"payload"}');
+    expect(decodeMemoData(hex)).toEqual({ v: 1, t: 'po', run: 'RUN1' });
+  });
+  it('a valid full object round-trips unchanged', () => {
+    const d = { v: 1 as const, t: 'po' as const, run: 'RUN1', row: 3, link: 'L1', ref: 'INV-204' };
+    expect(decodeMemoData(encodeMemoData(d))).toEqual(d);
   });
 });
