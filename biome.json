@@ -1,11 +1,14 @@
 {
   "$schema": "https://biomejs.dev/schemas/2.5.14/schema.json",
   "vcs": { "enabled": true, "clientKind": "git", "useIgnoreFile": true },
-  "files": { "includes": ["**", "!**/.next", "!**/dist", "!**/drizzle/meta", "!**/test/fixtures"] },
+  "files": {
+    "includes": ["**", "!**/.next", "!**/dist", "!**/drizzle/meta", "!**/test/fixtures", "!**/next-env.d.ts"]
+  },
   "formatter": { "enabled": true, "indentStyle": "space", "indentWidth": 2, "lineWidth": 110 },
   "linter": {
     "enabled": true,
     "rules": { "preset": "recommended", "suspicious": { "noExplicitAny": "error" } }
   },
-  "javascript": { "formatter": { "quoteStyle": "single", "semicolons": "always", "trailingCommas": "all" } }
+  "javascript": { "formatter": { "quoteStyle": "single", "semicolons": "always", "trailingCommas": "all" } },
+  "css": { "parser": { "cssModules": true, "tailwindDirectives": true } }
 }
