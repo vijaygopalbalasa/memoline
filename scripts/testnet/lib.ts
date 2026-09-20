@@ -97,3 +97,58 @@ export function saveJson(path: string, data: unknown): void {
 }
 
 export const explorer = (hash: Hex) => explorerTxUrl(CHAIN_ID, hash);
+
+/** Runs `fn` over `items` with at most `limit` calls in flight at once (same shape as
+ * apps/web's services/imports.ts#mapLimit; duplicated here since scripts must not import Next code). */
+export async function mapLimit<T, R>(items: T[], limit: number, fn: (item: T) => Promise<R>): Promise<R[]> {
+  const results: R[] = new Array(items.length);
+  let next = 0;
+  async function worker(): Promise<void> {
+    for (;;) {
+      const i = next++;
+      if (i >= items.length) return;
+      const item = items[i];
+      if (item === undefined) continue;
+      results[i] = await fn(item);
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
+  return results;
+}
+
+export type TestOutcome = { id: string; pass: boolean; reason: string };
+
+/**
+ * Minimal PASS/FAIL harness shared by the acceptance scripts: `record` prints one line as each test
+ * finishes, `run` wraps a test body so a thrown error becomes a FAIL instead of aborting the whole
+ * script (later tests that depend on an earlier result skip themselves via the `undefined` return),
+ * and `summarize` prints the final table and returns whether every test passed.
+ */
+export function createHarness() {
+  const results: TestOutcome[] = [];
+  function record(id: string, pass: boolean, reason: string): void {
+    results.push({ id, pass, reason });
+    console.log(`${pass ? 'PASS' : 'FAIL'} ${id} — ${reason}`);
+  }
+  async function run<V>(
+    id: string,
+    fn: () => Promise<{ pass: boolean; reason: string; value?: V }>,
+  ): Promise<V | undefined> {
+    try {
+      const outcome = await fn();
+      record(id, outcome.pass, outcome.reason);
+      return outcome.pass ? outcome.value : undefined;
+    } catch (e) {
+      record(id, false, `threw: ${(e as Error).message}`);
+      return undefined;
+    }
+  }
+  function summarize(): boolean {
+    console.log('\n--- summary ---');
+    for (const r of results) console.log(`${r.pass ? 'PASS' : 'FAIL'}  ${r.id.padEnd(6)} ${r.reason}`);
+    const failed = results.filter((r) => !r.pass).length;
+    console.log(`\n${results.length - failed}/${results.length} passed`);
+    return failed === 0;
+  }
+  return { results, record, run, summarize };
+}
