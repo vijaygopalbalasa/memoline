@@ -192,12 +192,14 @@ function errText(e: unknown, depth = 0): string {
   if (o.cause !== undefined && o.cause !== null) parts.push(errText(o.cause, depth + 1));
   return parts.filter((s) => s.length > 0).join(' | ');
 }
-function errCode(e: unknown): number | undefined {
-  if (e && typeof e === 'object') {
+/** Same bounded `.cause` walk as `errText`: viem nests errors several levels deep, and a cyclic or
+ * pathologically deep chain must not turn error mapping into a stack overflow. */
+function errCode(e: unknown, depth = 0): number | undefined {
+  if (e && typeof e === 'object' && depth < 5) {
     const o = e as { code?: unknown; status?: unknown; cause?: unknown };
     if (typeof o.code === 'number') return o.code;
     if (typeof o.status === 'number') return o.status;
-    if (o.cause) return errCode(o.cause);
+    if (o.cause) return errCode(o.cause, depth + 1);
   }
   return undefined;
 }

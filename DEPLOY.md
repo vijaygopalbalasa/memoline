@@ -72,7 +72,33 @@ jobs to once a day, which means a multi-step Import (anything past ~200,000 bloc
 time to finish. If you're on Hobby, either upgrade to Pro or expect slow Import completion for
 addresses with a lot of history — the first inline step still runs correctly either way.
 
-## 6. Mainnet smoke test
+## 6. Pre-mainnet: verify the chunk-lease suite against real Postgres
+
+**Blocking — do this before the mainnet smoke test below, and again after any change to
+`apps/web/src/services/runs.ts`.** The chunk lease is the only thing standing between a concurrent
+operator (two tabs, a retry, a force take-over) and paying the same rows twice: Memo has no on-chain
+replay guard, so every guard is a `SELECT … FOR UPDATE` on the run row plus a conditional UPDATE.
+
+The test suite runs on **pglite**, which is a single in-process connection. It executes the SQL, so the
+statements are exercised — but it can never produce *contention*: no second connection can block on the
+row lock, so a passing pglite run is not evidence that the locking works. Verify against a real
+Postgres with at least 2 connections before any mainnet release:
+
+```bash
+# any real Postgres (local, Docker, or a Neon branch) — never the production database
+createdb memoline_lease_check
+DATABASE_URL="postgres://localhost/memoline_lease_check" pnpm --filter @memoline/web db:migrate
+# point the chunk-lease tests at it (they currently build their own pglite in `makeTestDb`), then:
+pnpm --filter @memoline/web test -- runs.test.ts
+```
+
+The cases that matter are the concurrent ones in `apps/web/test/runs.test.ts`: two `prepareChunk` calls
+racing for one chunk (exactly one may get `kind: 'send'`), `preflightRun`'s rebuild racing a lease
+(the rebuild must abort, never re-chunk leased rows), and `settleChunk`'s DROPPED→READY transition
+racing a lease. Run them with concurrent connections; any two simultaneous `send` results for one chunk
+is a release blocker.
+
+## 7. Mainnet smoke test
 
 Before announcing the deployment as live, prove one real payout end-to-end on mainnet with
 `scripts/mainnet/smoke.ts` (mirrors the testnet `payout-e2e.ts` T1 case, at mainnet stakes — see its
@@ -114,7 +140,11 @@ Instead, just re-invoke the exact same command. It detects the pending file and 
   it reconciles and reports on it, deletes `pending.json`, and exits (0 if 3/3 rows reconciled cleanly,
   1 otherwise — either way, the run is now finished, not re-sent). Not found → it prints the hash and the
   explorer link and stops (exit 1); the transaction may still be in flight, so it leaves `pending.json` in
-  place and tells you to check the explorer and try resuming again shortly.
+  place and tells you to check the explorer and try resuming again shortly. If the explorer eventually
+  shows that hash as dropped/never mined, the only way forward is the manual escape hatch: delete
+  `scripts/mainnet/out/pending.json` yourself, then re-run. The script never deletes it for you on this
+  branch — "no receipt yet" and "never landed" look identical from here, and guessing wrong re-sends
+  real money.
 - If `pending.json` has no transaction hash yet (the process died before or during broadcast), it queries
   Arc for `Memo` events matching that exact run's memo IDs from the recorded start block onward. A match
   → it adopts that transaction (someone/something did broadcast it) and reconciles it the same way. No
@@ -125,16 +155,16 @@ Instead, just re-invoke the exact same command. It detects the pending file and 
 speculatively. If you genuinely want to abandon a pending run without waiting (e.g. you know for certain
 it was never broadcast), delete `scripts/mainnet/out/pending.json` yourself.
 
-## 7. Post-deploy checklist
+## 8. Post-deploy checklist
 
 - [ ] `/` loads over the production domain.
 - [ ] Sign-in works: connect a wallet, sign the SIWE message, land in `/app`.
 - [ ] `/import` reconciles a real mainnet address you paste in (any address with USDC/EURC history —
       doesn't have to be yours).
 - [ ] `/stats` responds and shows aggregate counts (zero is fine on a fresh deployment).
-- [ ] The mainnet smoke run (step 6) reconciles: 3/3 rows RECONCILED, fees tie out.
+- [ ] The mainnet smoke run (step 7) reconciles: 3/3 rows RECONCILED, fees tie out.
 
-## 8. Rollback
+## 9. Rollback
 
 Migrations in this cycle are additive-only (new tables/columns, no drops or renames), so rolling back
 application code never requires a down-migration: `git revert` the bad commit (or redeploy the last-known

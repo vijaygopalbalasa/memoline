@@ -45,7 +45,7 @@ describe('parseAmount6', () => {
   });
 
   it('rejects amounts above uint256 range safely', () => {
-    expect(() => parseAmount6('1' + '0'.repeat(80))).toThrow(AmountError);
+    expect(() => parseAmount6(`1${'0'.repeat(80)}`)).toThrow(AmountError);
   });
 });
 

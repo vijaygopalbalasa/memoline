@@ -134,6 +134,16 @@ describe('mapRpcError', () => {
       mapRpcError({ cause: { cause: { code: -32003, message: 'out of gas' } } }, { chunkRows: 80 }).code,
     ).toBe('GAS_CAP_EXCEEDED');
   });
+  it('does not recurse forever on a cyclic .cause chain (bounded like errText)', () => {
+    const a: { message: string; cause?: unknown } = { message: 'a' };
+    const b: { message: string; cause?: unknown } = { message: 'b', cause: a };
+    a.cause = b; // cycle: a -> b -> a -> …
+    expect(() => mapRpcError(a)).not.toThrow();
+    expect(mapRpcError(a).code).toBe('UNKNOWN');
+    // A code buried deeper than the 5-level bound is not found (the bound is the point).
+    const deep = { cause: { cause: { cause: { cause: { cause: { cause: { code: 429 } } } } } } };
+    expect(mapRpcError(deep).code).toBe('UNKNOWN');
+  });
   it('unknown errors become UNKNOWN with the original message in detail', () => {
     const e = mapRpcError(new Error('weird'));
     expect(e.code).toBe('UNKNOWN');
