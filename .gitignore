@@ -18,3 +18,7 @@ scripts/testnet/.env
 *.log
 .vercel
 .turbo
+
+# scripts workspace output
+scripts/testnet/out/
+scripts/mainnet/out/

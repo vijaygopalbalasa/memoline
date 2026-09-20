@@ -1,0 +1,156 @@
+import { encodeErrorResult, type Hex, stringToHex } from 'viem';
+import { describe, expect, it } from 'vitest';
+import { isLedgerError, ledgerError, mapRevert, mapRpcError } from '../src/index.js';
+
+const errorAbi = [{ type: 'error', name: 'Error', inputs: [{ name: 'reason', type: 'string' }] }] as const;
+const panicAbi = [{ type: 'error', name: 'Panic', inputs: [{ name: 'code', type: 'uint256' }] }] as const;
+const memoFailedAbi = [
+  { type: 'error', name: 'MemoFailed', inputs: [{ name: 'returnData', type: 'bytes' }] },
+] as const;
+/** Real on-chain returnData from Spike 0 test 6b (Arc Testnet): MemoFailed(bytes) (selector 0xed1966a2,
+ * circlefin/arc-node IMemo.sol) wrapping Error("Blocked address") for a blocklisted recipient. */
+const REAL_MEMO_FAILED_BLOCKLISTED: Hex =
+  '0xed1966a20000000000000000000000000000000000000000000000000000000000000020000000000000000000000000000000000000000000000000000000000000006408c379a00000000000000000000000000000000000000000000000000000000000000020000000000000000000000000000000000000000000000000000000000000000f426c6f636b65642061646472657373000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000';
+
+describe('mapRevert', () => {
+  it('maps Error(string) containing "blocklist"/"denylist"/"blacklist" to BLOCKLISTED', () => {
+    for (const reason of [
+      'USDC: address blocklisted',
+      'Denylist: recipient denied',
+      'account is blacklisted',
+    ]) {
+      const data = encodeErrorResult({ abi: errorAbi, errorName: 'Error', args: [reason] });
+      expect(mapRevert(data, {}).code).toBe('BLOCKLISTED');
+    }
+  });
+  it('maps insufficient balance/allowance reasons', () => {
+    const data = encodeErrorResult({
+      abi: errorAbi,
+      errorName: 'Error',
+      args: ['ERC20: transfer amount exceeds balance'],
+    });
+    expect(mapRevert(data, {}).code).toBe('INSUFFICIENT_BALANCE');
+  });
+  it('maps zero-address recipient before decoding', () => {
+    expect(mapRevert(undefined, { recipient: '0x0000000000000000000000000000000000000000' }).code).toBe(
+      'ZERO_ADDRESS',
+    );
+  });
+  it('maps empty revert data with a blocklist hint to BLOCKLISTED, otherwise TX_REVERTED', () => {
+    expect(mapRevert('0x', { blocklistedHint: true }).code).toBe('BLOCKLISTED');
+    expect(mapRevert('0x', {}).code).toBe('TX_REVERTED');
+    expect(mapRevert(undefined, {}).code).toBe('TX_REVERTED');
+  });
+  it('maps Panic(uint256) to TX_REVERTED with detail and never throws on garbage', () => {
+    const data = encodeErrorResult({ abi: panicAbi, errorName: 'Panic', args: [0x11n] });
+    expect(mapRevert(data, {}).code).toBe('TX_REVERTED');
+    expect(mapRevert('0xdeadbeef', {}).code).toBe('TX_REVERTED');
+    expect(mapRevert(stringToHex('junk'), {}).code).toBe('TX_REVERTED');
+  });
+  it('every error has a non-empty human message and nextStep', () => {
+    const e = mapRevert('0x', {});
+    expect(e.message.length).toBeGreaterThan(10);
+    expect(e.nextStep.length).toBeGreaterThan(10);
+  });
+
+  describe('MemoFailed unwrapping', () => {
+    it('unwraps the real on-chain MemoFailed(bytes) wrapping Error("Blocked address") to BLOCKLISTED', () => {
+      expect(mapRevert(REAL_MEMO_FAILED_BLOCKLISTED, {}).code).toBe('BLOCKLISTED');
+    });
+    it('unwraps MemoFailed wrapping an insufficient-balance Error(string) to INSUFFICIENT_BALANCE', () => {
+      const inner = encodeErrorResult({
+        abi: errorAbi,
+        errorName: 'Error',
+        args: ['ERC20: transfer amount exceeds balance'],
+      });
+      const wrapped = encodeErrorResult({ abi: memoFailedAbi, errorName: 'MemoFailed', args: [inner] });
+      expect(mapRevert(wrapped, {}).code).toBe('INSUFFICIENT_BALANCE');
+    });
+    it('unwraps MemoFailed wrapping empty inner bytes like empty revert data (honors blocklistedHint)', () => {
+      const wrapped = encodeErrorResult({ abi: memoFailedAbi, errorName: 'MemoFailed', args: ['0x'] });
+      expect(mapRevert(wrapped, { blocklistedHint: true }).code).toBe('BLOCKLISTED');
+      expect(mapRevert(wrapped, {}).code).toBe('TX_REVERTED');
+    });
+  });
+});
+
+describe('mapRpcError', () => {
+  it('maps HTTP 429 to RPC_RATE_LIMITED', () => {
+    expect(mapRpcError({ status: 429, message: 'Too Many Requests' }).code).toBe('RPC_RATE_LIMITED');
+    expect(mapRpcError(new Error('HTTP request failed. Status: 429')).code).toBe('RPC_RATE_LIMITED');
+  });
+  it('maps code 4444 pruned history', () => {
+    expect(mapRpcError({ code: 4444, message: 'pruned history unavailable' }).code).toBe(
+      'RPC_HISTORY_UNAVAILABLE',
+    );
+  });
+  it('maps -32602 max range to RPC_RANGE_TOO_LARGE', () => {
+    expect(mapRpcError({ code: -32602, message: 'request exceeded max allowed range' }).code).toBe(
+      'RPC_RANGE_TOO_LARGE',
+    );
+  });
+  it("maps dRPC's code-35 block-range error to RPC_RANGE_TOO_LARGE (the message overstates the real cap)", () => {
+    expect(
+      mapRpcError({ code: 35, details: 'ranges over 10000 blocks are not supported on free plan' }).code,
+    ).toBe('RPC_RANGE_TOO_LARGE');
+  });
+  it('requires text corroboration for code 35 (an unrelated code-35 error is not mislabelled a range error)', () => {
+    const code = mapRpcError({ code: 35, message: 'execution reverted' }).code;
+    expect(code).not.toBe('RPC_RANGE_TOO_LARGE');
+    expect(['TX_REVERTED', 'UNKNOWN']).toContain(code);
+  });
+  it('does not treat a generic "invalid block range" (e.g. a nonexistent block, not an over-large range) as RPC_RANGE_TOO_LARGE', () => {
+    expect(mapRpcError({ message: 'invalid block range' }).code).toBe('UNKNOWN');
+  });
+  it('maps a sustained-paging rate limit (code -32005, "rate limit exceeded") to RPC_RATE_LIMITED', () => {
+    expect(mapRpcError({ code: -32005, details: 'rate limit exceeded' }).code).toBe('RPC_RATE_LIMITED');
+  });
+  it('maps -32003 with many rows to GAS_CAP_EXCEEDED, and with few rows to TX_REVERTED (false-positive guard)', () => {
+    expect(mapRpcError({ code: -32003, message: 'out of gas' }, { chunkRows: 80 }).code).toBe(
+      'GAS_CAP_EXCEEDED',
+    );
+    expect(mapRpcError({ code: -32003, message: 'out of gas' }, { chunkRows: 1 }).code).toBe('TX_REVERTED');
+  });
+  it('maps Cloudflare 1010 / 403 to RPC_FORBIDDEN', () => {
+    expect(mapRpcError(new Error('HTTP request failed. Status: 403 error code: 1010')).code).toBe(
+      'RPC_FORBIDDEN',
+    );
+  });
+  it('maps a numeric status: 403 (no text pattern) to RPC_FORBIDDEN', () => {
+    expect(mapRpcError({ status: 403, message: 'Forbidden' }).code).toBe('RPC_FORBIDDEN');
+  });
+  it('walks a nested .cause to find the matching status', () => {
+    expect(
+      mapRpcError({ message: 'request failed', cause: { status: 429, message: 'Too Many Requests' } }).code,
+    ).toBe('RPC_RATE_LIMITED');
+  });
+  it('does not treat a text-only "out of gas" mention as the gas cap without the numeric -32003 code', () => {
+    expect(
+      mapRpcError({ code: -32000, message: 'execution reverted: out of gas' }, { chunkRows: 80 }).code,
+    ).toBe('TX_REVERTED');
+  });
+  it('finds a doubly-nested -32003 cause and still applies the chunkRows disambiguation', () => {
+    expect(
+      mapRpcError({ cause: { cause: { code: -32003, message: 'out of gas' } } }, { chunkRows: 80 }).code,
+    ).toBe('GAS_CAP_EXCEEDED');
+  });
+  it('does not recurse forever on a cyclic .cause chain (bounded like errText)', () => {
+    const a: { message: string; cause?: unknown } = { message: 'a' };
+    const b: { message: string; cause?: unknown } = { message: 'b', cause: a };
+    a.cause = b; // cycle: a -> b -> a -> …
+    expect(() => mapRpcError(a)).not.toThrow();
+    expect(mapRpcError(a).code).toBe('UNKNOWN');
+    // A code buried deeper than the 5-level bound is not found (the bound is the point).
+    const deep = { cause: { cause: { cause: { cause: { cause: { cause: { code: 429 } } } } } } };
+    expect(mapRpcError(deep).code).toBe('UNKNOWN');
+  });
+  it('unknown errors become UNKNOWN with the original message in detail', () => {
+    const e = mapRpcError(new Error('weird'));
+    expect(e.code).toBe('UNKNOWN');
+    expect(String(e.detail)).toContain('weird');
+  });
+  it('isLedgerError recognises shape', () => {
+    expect(isLedgerError(ledgerError('UNKNOWN'))).toBe(true);
+    expect(isLedgerError({ code: 'X' })).toBe(false);
+  });
+});
