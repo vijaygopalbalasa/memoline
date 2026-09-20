@@ -89,6 +89,14 @@ describe('mapRpcError', () => {
       'RPC_RANGE_TOO_LARGE',
     );
   });
+  it("maps dRPC's code-35 block-range error to RPC_RANGE_TOO_LARGE (the message overstates the real cap)", () => {
+    expect(
+      mapRpcError({ code: 35, details: 'ranges over 10000 blocks are not supported on free plan' }).code,
+    ).toBe('RPC_RANGE_TOO_LARGE');
+  });
+  it('maps a sustained-paging rate limit (code -32005, "rate limit exceeded") to RPC_RATE_LIMITED', () => {
+    expect(mapRpcError({ code: -32005, details: 'rate limit exceeded' }).code).toBe('RPC_RATE_LIMITED');
+  });
   it('maps -32003 with many rows to GAS_CAP_EXCEEDED, and with few rows to TX_REVERTED (false-positive guard)', () => {
     expect(mapRpcError({ code: -32003, message: 'out of gas' }, { chunkRows: 80 }).code).toBe(
       'GAS_CAP_EXCEEDED',

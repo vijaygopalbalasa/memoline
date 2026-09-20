@@ -5,6 +5,10 @@ import { chainById } from './chains.js';
 export type ClientOptions = {
   chainId: ChainId;
   primaryUrl: string;
+  /** dRPC's free tier caps eth_getLogs ranges at roughly 100 blocks in practice — its own error
+   * message claims a much larger 10,000-block limit, which understates how small the real cap is —
+   * so it is unsuitable as a `fallbackUrl` for anything that pages through history
+   * (`fetchAddressLogs`). Prefer QuickNode (see `.env.example` / `scripts/testnet/lib.ts`). */
   fallbackUrl?: string;
   /** Public Arc RPCs return Cloudflare 1010 to default programmatic user agents. Always set one. */
   userAgent: string;

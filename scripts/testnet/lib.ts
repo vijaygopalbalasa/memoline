@@ -51,7 +51,10 @@ export function testnetClients() {
   const publicClient = makeClient({
     chainId: CHAIN_ID,
     primaryUrl: env.rpc,
-    fallbackUrl: 'https://rpc.drpc.testnet.arc.io',
+    // dRPC's free tier is unsuitable for history: it advertises a 10,000-block eth_getLogs cap but
+    // was observed failing at 500 blocks (100 blocks did succeed) against Arc Testnet — see the
+    // Task 17 controller run and packages/ledger/src/chain/client.ts. QuickNode doesn't share that limit.
+    fallbackUrl: 'https://rpc.quicknode.testnet.arc.io',
     userAgent: UA,
   });
   const walletClient = createWalletClient({

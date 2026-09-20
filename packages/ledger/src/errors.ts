@@ -206,10 +206,24 @@ function errCode(e: unknown): number | undefined {
 export function mapRpcError(e: unknown, ctx: { chunkRows?: number } = {}): LedgerError {
   const text = errText(e);
   const code = errCode(e);
-  if (code === 429 || /status:\s*429|too many requests/i.test(text))
+  // -32005 + "rate limit" is what Arc's primary RPC returns under sustained paging (observed on
+  // rpc.testnet.arc.io); 429/"too many requests" is the generic HTTP-layer signal.
+  if (code === 429 || code === -32005 || /status:\s*429|too many requests|rate limit/i.test(text))
     return ledgerError('RPC_RATE_LIMITED', text);
   if (code === 4444 || /pruned history/i.test(text)) return ledgerError('RPC_HISTORY_UNAVAILABLE', text);
-  if (code === -32602 && /range/i.test(text)) return ledgerError('RPC_RANGE_TOO_LARGE', text);
+  // The -32602 + "range" rule is the original (generic JSON-RPC) shape. Code 35 and the wordier
+  // patterns are what dRPC's free tier returns for its (undocumented, much smaller than its own
+  // error message claims) log-range cap — e.g. "ranges over 10000 blocks are not supported on free
+  // plan" while the range that actually fails is closer to 500 blocks.
+  if (
+    (code === -32602 && /range/i.test(text)) ||
+    code === 35 ||
+    /ranges? over \d+ blocks|block range|range too (large|wide)|exceeds (the )?max(imum)? (allowed )?range/i.test(
+      text,
+    )
+  ) {
+    return ledgerError('RPC_RANGE_TOO_LARGE', text);
+  }
   if (code === 403 || /status:\s*403|error code:\s*1010/i.test(text))
     return ledgerError('RPC_FORBIDDEN', text);
   // GAS_CAP_EXCEEDED only when the numeric RPC code is -32003 (Arc returns -32003 for both a real

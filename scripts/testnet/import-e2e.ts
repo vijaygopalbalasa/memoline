@@ -50,7 +50,8 @@ async function main() {
       address: SENDER,
       fromBlock,
       toBlock: head,
-      onPage: (p) => console.log(`  fetched blocks ${p.from}..${p.to} (${p.logs} logs)`),
+      onPage: (p) =>
+        console.log(`  fetched blocks ${p.from}..${p.to} (page size ${p.to - p.from + 1n}, ${p.logs} logs)`),
     });
     return {
       pass: true,

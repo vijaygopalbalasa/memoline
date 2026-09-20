@@ -27,6 +27,15 @@ const memoEvent = getAbiItem({ abi: memoAbi, name: 'Memo' });
  * disguised range error, so the caller then treats it like one. */
 const UNKNOWN_INPLACE_RETRIES = 2;
 
+/** A sustained rate limit (observed on Arc's primary RPC under heavy paging) needs a more patient
+ * backoff than a plain retry: double the per-attempt sleep (so the production default of 500ms
+ * becomes 1000ms × attempt) and cap it at 10s so a high `maxAttempts` can't balloon into minutes.
+ * Scaling off the caller's `sleepMs` — rather than a bare constant — keeps a caller-supplied
+ * `sleepMs: 0` (every test in fetch.test.ts) instant, while production's default gets the intended
+ * longer wait. */
+const RATE_LIMIT_BACKOFF_MULTIPLIER = 2;
+const RATE_LIMIT_BACKOFF_CAP_MS = 10_000;
+
 /**
  * Thrown by `callWithRetry` when it stops retrying a call in place — either because the range itself
  * must shrink (a page-level decision, `RPC_RANGE_TOO_LARGE` or an `UNKNOWN` that outlasted its in-place
@@ -36,9 +45,17 @@ const UNKNOWN_INPLACE_RETRIES = 2;
  */
 class FetchGiveUp extends Error {
   constructor(readonly ledger: LedgerError) {
-    super(`${ledger.code} — ${ledger.message}`);
+    super(`${ledger.code} — ${ledger.message}${detailSuffix(ledger)}`);
     this.name = 'FetchGiveUp';
   }
+}
+
+/** The raw provider text (`LedgerError.detail`), when present, appended to a give-up message — the
+ * generic per-code message ("The RPC rejected the log query as too large") is the same for every
+ * provider, but the detail is what actually tells you which provider and why (e.g. dRPC's
+ * "ranges over 10000 blocks are not supported on free plan", which understates its own real cap). */
+function detailSuffix(ledger: LedgerError): string {
+  return ledger.detail === undefined ? '' : ` (provider said: ${String(ledger.detail)})`;
 }
 
 /**
@@ -71,7 +88,9 @@ async function callWithRetry(
       if (err.code === 'RPC_RATE_LIMITED') {
         rateAttempts++;
         if (rateAttempts > maxAttempts) throw new FetchGiveUp(err);
-        await sleep(sleepMs * rateAttempts);
+        await sleep(
+          Math.min(sleepMs * RATE_LIMIT_BACKOFF_MULTIPLIER * rateAttempts, RATE_LIMIT_BACKOFF_CAP_MS),
+        );
         continue;
       }
       // Not retryable (RPC_FORBIDDEN, RPC_HISTORY_UNAVAILABLE, TX_REVERTED, …): fail fast.
@@ -171,7 +190,7 @@ export async function fetchAddressLogs(client: FetchClient, o: FetchOptions): Pr
         continue;
       }
       throw new Error(
-        `fetchAddressLogs failed at block ${from}: ${ledger.code} — ${ledger.message} ${ledger.nextStep}`,
+        `fetchAddressLogs failed at block ${from}: ${ledger.code} — ${ledger.message} ${ledger.nextStep}${detailSuffix(ledger)}`,
       );
     }
   }
