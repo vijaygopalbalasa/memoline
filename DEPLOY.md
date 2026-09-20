@@ -11,7 +11,7 @@ all still to do (see `PROGRESS.md`). Follow it in order; each step assumes the o
 | 1 | **GitHub org** (e.g. `memoline`) | Hosts the public repo; GitHub Actions runs `.github/workflows/ci.yml` (lint/typecheck/test) on push. |
 | 2 | **Domain** (e.g. `memoline.io`) | The canonical production URL — becomes `NEXT_PUBLIC_APP_URL` and the SIWE sign-in domain. Attach it to the Vercel project once created. |
 | 3 | **Neon** ([neon.tech](https://neon.tech), free tier) | Serverless Postgres for `DATABASE_URL`. Use the **pooled** connection string (`-pooler` in the hostname) — the app opens a connection pool per serverless instance. |
-| 4 | **Alchemy** — Arc **mainnet and testnet** apps | Archive-node RPC keys for `ARC_RPC_PRIMARY` and `ARC_TESTNET_RPC_PRIMARY`. The public fallbacks baked into `.env.example` work but are rate-limited and (dRPC specifically) cap `eth_getLogs` at ~100 blocks — unsuitable for Import at any real volume. |
+| 4 | **Alchemy** — Arc **mainnet and testnet** apps | An archive-node key for `ARC_RPC_PRIMARY`/`ARC_TESTNET_RPC_PRIMARY`, recommended for any real Import volume. Where the public defaults in `.env.example` stand today: the un-keyed primary (`rpc.mainnet.arc.io`) itself hangs on a wide `eth_getLogs` range with no error (`OPEN_QUESTIONS.md` §8b) rather than rejecting it cleanly; the **fallback this app actually ships with is QuickNode's public mainnet mirror**, which does serve wide ranges (a shared, unauthenticated endpoint, so still rate-limited under load). **dRPC is not configured anywhere in this app** — it's called out in code comments (`packages/ledger/src/chain/client.ts`) purely as a provider to avoid if you're picking your own: its free tier caps `eth_getLogs` at roughly 100 blocks in practice, well under what it advertises. |
 | 5 | **Reown / WalletConnect Cloud** ([reown.com](https://reown.com), free) | A project id for `WALLETCONNECT_PROJECT_ID`, required by RainbowKit for WalletConnect/mobile wallet support. |
 | 6 | **Vercel** | Hosting, the `/api/cron/imports` cron job, and env var storage. |
 
@@ -89,13 +89,41 @@ header comment for the full list of pre-flight refusals it runs).
    ADDRESS=0x...       # must match PRIVATE_KEY exactly
    ARC_RPC=https://arc-mainnet.g.alchemy.com/v2/<key>
    ```
-4. Pick 3 real, checksummed recipient addresses you control (or that you're comfortable sending 1–2 USDC
+4. **Run this in a clean shell.** `dotenv` (which loads `scripts/mainnet/.env`) never overrides a
+   variable that is already set in the environment. If a previous session left `PRIVATE_KEY`, `ADDRESS`,
+   or `ARC_RPC` exported from testing something else, the script will silently use that stale value
+   instead of the `.env` file's — open a fresh terminal, or `unset PRIVATE_KEY ADDRESS ARC_RPC` first.
+5. Pick 3 real, checksummed recipient addresses you control (or that you're comfortable sending 1–2 USDC
    to) and run:
    ```bash
    SMOKE_RECIPIENTS=0xAaaa...,0xBbbb...,0xCccc... pnpm --filter @memoline/scripts mainnet-smoke
    ```
-5. **This is a human-run, one-off step.** It signs and broadcasts a real transaction; it is never run by CI. Confirm the printed explorer link shows 3 successful transfers and the script
+6. **This is a human-run, one-off step.** It signs and broadcasts a real transaction; it is never run by CI. Confirm the printed explorer link shows 3 successful transfers and the script
    reports `PASS` before treating the deployment as verified.
+
+### Resuming an interrupted smoke run
+
+Before it sends anything, the script writes `scripts/mainnet/out/pending.json` (the run id, recipients,
+amounts, and the block height right before sending), then rewrites it with the transaction hash the
+instant `sendTransaction` returns one. **If the process dies, the terminal disconnects, or
+`waitForTransactionReceipt` times out after that point, do not simply re-run the command** — the script
+itself already refuses to: as long as `pending.json` exists, it will never send a second transaction.
+Instead, just re-invoke the exact same command. It detects the pending file and resumes:
+
+- If `pending.json` has a transaction hash, it looks up that transaction's receipt directly. Found →
+  it reconciles and reports on it, deletes `pending.json`, and exits (0 if 3/3 rows reconciled cleanly,
+  1 otherwise — either way, the run is now finished, not re-sent). Not found → it prints the hash and the
+  explorer link and stops (exit 1); the transaction may still be in flight, so it leaves `pending.json` in
+  place and tells you to check the explorer and try resuming again shortly.
+- If `pending.json` has no transaction hash yet (the process died before or during broadcast), it queries
+  Arc for `Memo` events matching that exact run's memo IDs from the recorded start block onward. A match
+  → it adopts that transaction (someone/something did broadcast it) and reconciles it the same way. No
+  match → it reports that the previous attempt never landed and that you may delete `pending.json` by
+  hand once you're sure of that, to allow a fresh send; it never deletes the file on your behalf.
+
+`pending.json` is only ever deleted once a receipt has actually been fetched and reconciled — never
+speculatively. If you genuinely want to abandon a pending run without waiting (e.g. you know for certain
+it was never broadcast), delete `scripts/mainnet/out/pending.json` yourself.
 
 ## 7. Post-deploy checklist
 

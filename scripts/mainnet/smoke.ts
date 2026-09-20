@@ -10,13 +10,16 @@
  *
  * Reads `scripts/mainnet/.env` (git-ignored, never committed):
  *   PRIVATE_KEY       - the smoke-test signer's key. Must be a wallet set aside for this alone.
- *   ADDRESS           - that key's address, as a cross-check (see refuseToRun below).
+ *   ADDRESS           - that key's address, as a cross-check (see loadAndValidateEnv below).
  *   ARC_RPC           - a mainnet Arc RPC endpoint. No default: the operator must choose one deliberately.
  * Reads from the process environment (not the .env file, so it's easy to pass per-invocation):
  *   SMOKE_RECIPIENTS  - exactly 3 comma-separated, EIP-55 checksummed addresses. Required, no default —
  *                       this script never invents a recipient for a real mainnet send.
+ * NOTE: `dotenv` never overrides a variable already present in the environment — run this in a clean
+ * shell (no stale exported PRIVATE_KEY/ADDRESS/ARC_RPC from an earlier session) or you may silently
+ * reuse the wrong wallet or endpoint.
  *
- * Refuses to run (before touching the network, or before sending, depending on the check) if:
+ * Refuses to send (before touching the network, or before broadcasting, depending on the check) if:
  *   - the derived signer address equals the testnet signer 0x427C62eDCae20DDc8c5e875De39D4E4845491458
  *   - ADDRESS does not match the address PRIVATE_KEY derives
  *   - SMOKE_RECIPIENTS is missing, not exactly 3 entries, or any entry fails strict EIP-55 checksum
@@ -24,8 +27,19 @@
  *   - the signer's USDC balance is below 6 USDC (5 to send + headroom for gas, which Arc also charges
  *     in USDC — its native currency is USDC at 18 decimals)
  *   - the signer is not a plain EOA (Memo/Multicall3From require tx.origin == sender)
+ *
+ * DOUBLE-SEND GUARD (`scripts/mainnet/out/pending.json`): a fresh run's intent (recipients, amounts,
+ * the block height just before sending) is written to this file *before* `sendTransaction` is called,
+ * and rewritten with the transaction hash the moment `sendTransaction` returns one. If the script is
+ * re-invoked while this file exists, it never sends a new transaction — it resumes: it looks up the
+ * pending run's fate (by hash if one was recorded, otherwise by querying Memo logs for the pending
+ * run's exact memoIds) and reconciles whatever it finds instead. The file is only deleted once a
+ * receipt has actually been fetched and reconciled — i.e. once the on-chain outcome is known for
+ * certain. See DEPLOY.md §6 ("Resuming an interrupted smoke run") for the operator-facing version of
+ * this. This is intentionally simpler than the web app's DB-backed chunk leases (`services/runs.ts`):
+ * a single human running one transaction by hand needs a crash-safe file, not a lease server.
  */
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import {
   ADDRESSES,
@@ -38,6 +52,7 @@ import {
   FEE,
   makeClient,
   makePayoutRow,
+  memoAbi,
   newRunId,
   type PayoutRow,
   type PreflightContext,
@@ -55,9 +70,11 @@ import {
   type Address,
   createWalletClient,
   erc20Abi,
+  getAbiItem,
   type Hex,
   http,
   isAddress,
+  type PublicClient,
   type TransactionReceipt,
 } from 'viem';
 import { privateKeyToAccount } from 'viem/accounts';
@@ -70,9 +87,11 @@ const TESTNET_SIGNER = '0x427C62eDCae20DDc8c5e875De39D4E4845491458';
 // transport for the pre-flight eth_call, never as the primary — the operator's ARC_RPC always is.
 const FALLBACK_RPC = 'https://rpc.quicknode.mainnet.arc.io';
 const OUT = resolve(import.meta.dirname, 'out');
+const PENDING_PATH = resolve(OUT, 'pending.json');
+const memoEvent = getAbiItem({ abi: memoAbi, name: 'Memo' });
 
-/** Thrown by every refuseToRun check below — distinct from a plain runtime error so `main`'s catch can
- * report it as a deliberate refusal, not a bug. */
+/** Thrown by every refuse() below — distinct from a plain runtime error so `main`'s catch can report
+ * it as a deliberate refusal, not a bug. */
 class RefusalError extends Error {
   constructor(message: string) {
     super(message);
@@ -131,6 +150,99 @@ function loadAndValidateEnv(): MainnetEnv {
   return { privateKey: pk, address: account.address, rpc, recipients };
 }
 
+// ---- pending.json: the double-send guard ----
+
+type PendingRow = { rowIndex: number; recipient: Address; amount6: string; reference: string };
+type PendingRun = {
+  runId: string;
+  sender: Address;
+  token: 'USDC';
+  chainId: typeof CHAIN_ID;
+  startBlock: string;
+  createdAt: string;
+  rows: PendingRow[];
+  txHash?: Hex;
+};
+
+function isPendingRow(x: unknown): x is PendingRow {
+  if (typeof x !== 'object' || x === null) return false;
+  const r = x as Record<string, unknown>;
+  return (
+    typeof r.rowIndex === 'number' &&
+    typeof r.recipient === 'string' &&
+    typeof r.amount6 === 'string' &&
+    typeof r.reference === 'string'
+  );
+}
+
+/** Structural validation only (this file guards real money — never guess a repair, refuse instead). */
+function validatePending(x: unknown): PendingRun {
+  if (typeof x !== 'object' || x === null) refuse(`${PENDING_PATH} does not contain a JSON object`);
+  const p = x as Record<string, unknown>;
+  if (typeof p.runId !== 'string' || typeof p.sender !== 'string' || p.token !== 'USDC') {
+    refuse(`${PENDING_PATH} is missing runId/sender/token — inspect it by hand, do not delete blindly`);
+  }
+  if (p.chainId !== CHAIN_ID)
+    refuse(`${PENDING_PATH} has chainId ${String(p.chainId)}, expected ${CHAIN_ID}`);
+  if (typeof p.startBlock !== 'string' || typeof p.createdAt !== 'string') {
+    refuse(`${PENDING_PATH} is missing startBlock/createdAt`);
+  }
+  if (!Array.isArray(p.rows) || p.rows.length !== 3 || !p.rows.every(isPendingRow)) {
+    refuse(`${PENDING_PATH} does not have exactly 3 well-formed rows`);
+  }
+  if (p.txHash !== undefined && (typeof p.txHash !== 'string' || !/^0x[0-9a-fA-F]{64}$/.test(p.txHash))) {
+    refuse(`${PENDING_PATH} has a malformed txHash`);
+  }
+  return {
+    runId: p.runId,
+    sender: p.sender as Address,
+    token: 'USDC',
+    chainId: CHAIN_ID,
+    startBlock: p.startBlock,
+    createdAt: p.createdAt,
+    rows: p.rows as PendingRow[],
+    ...(p.txHash !== undefined ? { txHash: p.txHash as Hex } : {}),
+  };
+}
+
+function loadPending(): PendingRun | null {
+  if (!existsSync(PENDING_PATH)) return null;
+  const raw = readFileSync(PENDING_PATH, 'utf8');
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch (e) {
+    refuse(
+      `${PENDING_PATH} exists but is not valid JSON (${(e as Error).message}) — a previous run may have ` +
+        'been interrupted mid-write. Inspect it by hand before deciding whether it is safe to delete; ' +
+        'refusing to guess.',
+    );
+  }
+  return validatePending(parsed);
+}
+
+/** Write-then-rename so a crash mid-write never leaves a half-written (corrupt) pending.json — the file
+ * that stands between a re-invocation and a duplicate real payment must never be ambiguous. */
+function savePending(p: PendingRun): void {
+  mkdirSync(dirname(PENDING_PATH), { recursive: true });
+  const tmp = `${PENDING_PATH}.tmp`;
+  writeFileSync(tmp, JSON.stringify(p, null, 2));
+  renameSync(tmp, PENDING_PATH);
+}
+
+function deletePending(): void {
+  rmSync(PENDING_PATH, { force: true });
+}
+
+function pendingToRows(p: PendingRun): PayoutRow[] {
+  return p.rows
+    .slice()
+    .sort((a, b) => a.rowIndex - b.rowIndex)
+    .map((r) => makePayoutRow(p.runId, r.rowIndex, r.recipient, BigInt(r.amount6), r.reference));
+}
+
+// ---- shared helpers ----
+
 function saveJson(path: string, data: unknown): void {
   mkdirSync(dirname(path), { recursive: true });
   writeFileSync(
@@ -170,6 +282,138 @@ function buildReportRow(
   return out;
 }
 
+/**
+ * Reconciles a receipt against a (fresh or resumed) pending run, exports the CSV/JSON, prints the
+ * result, and reports whether every row RECONCILED with fees tying out. Shared by the fresh-send path
+ * and both resume paths so all three assert exactly the same thing the same way.
+ */
+async function finalize(
+  publicClient: PublicClient,
+  pending: PendingRun,
+  receipt: TransactionReceipt,
+): Promise<boolean> {
+  const rows = pendingToRows(pending);
+  const chunk: Chunk = { idx: 0, rows };
+  const block = await publicClient.getBlock({ blockNumber: receipt.blockNumber });
+  const blockTime = Number(block.timestamp);
+
+  const rec = reconcileReceipt(receipt, {
+    chainId: CHAIN_ID,
+    sender: pending.sender,
+    token: 'USDC',
+    chunk,
+    runId: pending.runId,
+    blockTime,
+  });
+  const report: RunReport = {
+    runId: pending.runId,
+    chainId: CHAIN_ID,
+    sender: pending.sender,
+    token: 'USDC',
+    csvSha256: 'n/a (mainnet smoke test, no CSV file involved)',
+    generatedAt: new Date().toISOString(),
+    rows: rows.map((r) => buildReportRow(pending.runId, r, rec, receipt, blockTime)),
+  };
+  const csv = runToCsv(report);
+  const footer = runFooter(report);
+  const feeSum = report.rows.reduce((s, r) => s + (r.feeRowNative18 ?? 0n), 0n);
+  const expectedFee = receipt.gasUsed * receipt.effectiveGasPrice;
+
+  const explorerUrl = explorerTxUrl(CHAIN_ID, receipt.transactionHash);
+  const csvPath = resolve(OUT, `mainnet-smoke-${pending.runId}.csv`);
+  mkdirSync(dirname(csvPath), { recursive: true });
+  writeFileSync(csvPath, csv);
+  saveJson(resolve(OUT, `mainnet-smoke-${pending.runId}-receipt.json`), {
+    rows,
+    receipt,
+    runId: pending.runId,
+    sender: pending.sender,
+  });
+
+  const allReconciled = rec.rows.every((r) => r.status === 'RECONCILED');
+  const feesTieOut = feeSum === expectedFee && rec.chunkFeeNative18 === expectedFee;
+  const pass =
+    allReconciled &&
+    rec.entries.length === 3 &&
+    rec.checks.sumOk &&
+    footer.total_paid_base6 === 5_000_000n &&
+    feesTieOut;
+
+  console.log(`\nexplorer: ${explorerUrl}`);
+  console.log(`csv export: ${csvPath}`);
+  console.log(`footer: ${JSON.stringify(footer, (_k, v) => (typeof v === 'bigint' ? v.toString() : v))}`);
+  if (!pass) {
+    console.error(
+      `\nRECONCILIATION FAILED — inspect the transaction above by hand.\n` +
+        `rows=${JSON.stringify(rec.rows)}\nchecks=${JSON.stringify(rec.checks)}\n` +
+        `feeSum=${feeSum} expectedFee=${expectedFee}`,
+    );
+  } else {
+    console.log(
+      `\nPASS — 3/3 rows RECONCILED, total paid ${footer.total_paid} USDC, fees tie out ` +
+        `(${feeSum} = gasUsed(${receipt.gasUsed}) * effectiveGasPrice(${receipt.effectiveGasPrice})).`,
+    );
+  }
+  return pass;
+}
+
+/**
+ * `pending.json` exists: a previous invocation started (or fully sent) a run and never confirmed it
+ * cleanly. Never sends a new transaction here — only looks up what actually happened and reconciles
+ * it. `pending.json` is deleted once a receipt is found and processed (the on-chain outcome is then
+ * certain, whether or not reconciliation itself passed) — never before that.
+ */
+async function resumePending(publicClient: PublicClient, pending: PendingRun): Promise<never> {
+  console.log(
+    `found ${PENDING_PATH} from ${pending.createdAt} (run ${pending.runId}) — resuming instead of ` +
+      'sending a new transaction.',
+  );
+
+  if (pending.txHash) {
+    console.log(`pending run already has txHash ${pending.txHash} — looking up its receipt…`);
+    let receipt: TransactionReceipt;
+    try {
+      receipt = await publicClient.getTransactionReceipt({ hash: pending.txHash });
+    } catch {
+      console.error(
+        `\nno receipt found yet for ${pending.txHash}.\n` +
+          `Check ${explorerTxUrl(CHAIN_ID, pending.txHash)} by hand — it may still be pending, or it may ` +
+          'have been dropped. Re-run this script later to check again. Do NOT delete pending.json and do ' +
+          'NOT re-run with a fresh send until you know which.',
+      );
+      process.exit(1);
+    }
+    const pass = await finalize(publicClient, pending, receipt);
+    deletePending();
+    process.exit(pass ? 0 : 1);
+  }
+
+  console.log('pending run has no txHash — the previous attempt may have died before broadcasting.');
+  console.log("checking Memo logs for this run's exact memoIds…");
+  const rows = pendingToRows(pending);
+  const logs = await publicClient.getLogs({
+    address: ADDRESSES[CHAIN_ID].memo.address,
+    event: memoEvent,
+    args: { sender: pending.sender, memoId: rows.map((r) => r.memoId) },
+    fromBlock: BigInt(pending.startBlock),
+    toBlock: 'latest',
+  });
+  const adoptedHash = logs[0]?.transactionHash;
+  if (!adoptedHash) {
+    console.error(
+      '\nno Memo logs found for this pending run — the previous attempt did not land on-chain.\n' +
+        `If you are confident it never will, delete ${PENDING_PATH} by hand to retry with a fresh send. ` +
+        'Refusing to delete it automatically.',
+    );
+    process.exit(1);
+  }
+  console.log(`found ${logs.length} matching Memo log(s) — adopting tx ${adoptedHash}`);
+  const receipt = await publicClient.getTransactionReceipt({ hash: adoptedHash });
+  const pass = await finalize(publicClient, pending, receipt);
+  deletePending();
+  process.exit(pass ? 0 : 1);
+}
+
 async function main() {
   const env = loadAndValidateEnv();
   const SENDER = env.address;
@@ -185,6 +429,12 @@ async function main() {
   const chainId = await publicClient.getChainId();
   if (chainId !== CHAIN_ID) {
     refuse(`ARC_RPC reports chain ID ${chainId}, expected Arc mainnet (${CHAIN_ID}) — refusing to run`);
+  }
+
+  const pending = loadPending();
+  if (pending) {
+    await resumePending(publicClient, pending);
+    return; // unreachable: resumePending always exits the process
   }
 
   const usdcBal = await publicClient.readContract({
@@ -237,6 +487,24 @@ async function main() {
   }
   console.log(`pre-flight OK, estimated gas: ${pf.gasEstimate}`);
 
+  const startBlock = await publicClient.getBlockNumber();
+  const pending2: PendingRun = {
+    runId,
+    sender: SENDER,
+    token: 'USDC',
+    chainId: CHAIN_ID,
+    startBlock: startBlock.toString(),
+    createdAt: new Date().toISOString(),
+    rows: rows.map((r) => ({
+      rowIndex: r.rowIndex,
+      recipient: r.recipient,
+      amount6: r.amount6.toString(),
+      reference: r.reference,
+    })),
+  };
+  savePending(pending2);
+  console.log(`wrote ${PENDING_PATH} — this run will not send a second time even if this process dies now.`);
+
   const data = buildChunkCalldata(T.memo.address, T.usdc.address, chunk);
   const fees = await publicClient.estimateFeesPerGas();
   const maxFeePerGas = clampMaxFeePerGas(fees.maxFeePerGas ?? 0n);
@@ -251,67 +519,16 @@ async function main() {
     maxFeePerGas,
     maxPriorityFeePerGas,
   });
-  console.log(`sent ${hash}, waiting for receipt…`);
-  const receipt = await publicClient.waitForTransactionReceipt({ hash, timeout: 120_000 });
-  const block = await publicClient.getBlock({ blockNumber: receipt.blockNumber });
-  const blockTime = Number(block.timestamp);
-
-  const rec = reconcileReceipt(receipt, {
-    chainId: CHAIN_ID,
-    sender: SENDER,
-    token: 'USDC',
-    chunk,
-    runId,
-    blockTime,
-  });
-  const report: RunReport = {
-    runId,
-    chainId: CHAIN_ID,
-    sender: SENDER,
-    token: 'USDC',
-    csvSha256: 'n/a (mainnet smoke test, no CSV file involved)',
-    generatedAt: new Date().toISOString(),
-    rows: rows.map((r) => buildReportRow(runId, r, rec, receipt, blockTime)),
-  };
-  const csv = runToCsv(report);
-  const footer = runFooter(report);
-  const feeSum = report.rows.reduce((s, r) => s + (r.feeRowNative18 ?? 0n), 0n);
-  const expectedFee = receipt.gasUsed * receipt.effectiveGasPrice;
-
-  const explorerUrl = explorerTxUrl(CHAIN_ID, receipt.transactionHash);
-  const csvPath = resolve(OUT, `mainnet-smoke-${runId}.csv`);
-  writeFileSyncCsv(csvPath, csv);
-  saveJson(resolve(OUT, `mainnet-smoke-${runId}-receipt.json`), { rows, receipt, runId, sender: SENDER });
-
-  const allReconciled = rec.rows.every((r) => r.status === 'RECONCILED');
-  const feesTieOut = feeSum === expectedFee && rec.chunkFeeNative18 === expectedFee;
-  const pass =
-    allReconciled &&
-    rec.entries.length === 3 &&
-    rec.checks.sumOk &&
-    footer.total_paid_base6 === 5_000_000n &&
-    feesTieOut;
-
-  console.log(`\nexplorer: ${explorerUrl}`);
-  console.log(`csv export: ${csvPath}`);
-  console.log(`footer: ${JSON.stringify(footer, (_k, v) => (typeof v === 'bigint' ? v.toString() : v))}`);
-
-  if (!pass) {
-    console.error(
-      `\nRECONCILIATION FAILED after a real send — inspect the transaction above by hand.\n` +
-        `rows=${JSON.stringify(rec.rows)}\nchecks=${JSON.stringify(rec.checks)}\n` +
-        `feeSum=${feeSum} expectedFee=${expectedFee}`,
-    );
-    process.exit(1);
-  }
+  pending2.txHash = hash;
+  savePending(pending2);
   console.log(
-    `\nPASS — 3/3 rows RECONCILED, total paid ${footer.total_paid} USDC, fees tie out (${feeSum} = gasUsed(${receipt.gasUsed}) * effectiveGasPrice(${receipt.effectiveGasPrice})).`,
+    `sent ${hash} — if this run does not complete, DO NOT re-run; re-invoke this script to resume from ${PENDING_PATH}`,
   );
-}
 
-function writeFileSyncCsv(path: string, csv: string): void {
-  mkdirSync(dirname(path), { recursive: true });
-  writeFileSync(path, csv);
+  const receipt = await publicClient.waitForTransactionReceipt({ hash, timeout: 120_000 });
+  const pass = await finalize(publicClient, pending2, receipt);
+  deletePending();
+  if (!pass) process.exit(1);
 }
 
 main().catch((e) => {

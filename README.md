@@ -74,8 +74,6 @@ ERC-8183 escrow slice are future work, not part of this build.
 - **Fees are not imported for non-transfer transactions.** Import only attributes a gas fee to entries it
   reconciles from Memo/Transfer logs; other activity by the same address isn't priced into the ledger.
 - **EURC is implemented but untested against a live transfer** — see Status.
-- **No fiat, no custody.** Memoline never holds a private key or a token balance; it only builds calldata
-  for your wallet to sign.
 
 ## Run it locally
 
