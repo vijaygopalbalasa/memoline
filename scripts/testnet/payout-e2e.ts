@@ -323,7 +323,20 @@ async function main() {
         reason: `chunk 0 send reverted on-chain: tx ${explorer(receipt.transactionHash)}`,
       };
     }
-    totalSentByToken.USDC += chunk0.rows.reduce((s, r) => s + r.amount6, 0n);
+    // Chain-verified accounting (same as T1/T2/T8): sum what reconcileReceipt actually matched
+    // on-chain, not the chunk's declared amounts, and only when every row reconciled.
+    const block = await publicClient.getBlock({ blockNumber: receipt.blockNumber });
+    const rec = reconcileReceipt(receipt, {
+      chainId: CHAIN_ID,
+      sender: SENDER,
+      token: 'USDC',
+      chunk: chunk0,
+      runId,
+      blockTime: Number(block.timestamp),
+    });
+    const reconciled =
+      rec.rows.every((r) => r.status === 'RECONCILED') && rec.entries.length === chunk0.rows.length;
+    if (reconciled) totalSentByToken.USDC += rec.entries.reduce((s, e) => s + e.amount6, 0n);
 
     const logsChunk0 = await publicClient.getLogs({
       address: T.memo.address,
@@ -343,12 +356,12 @@ async function main() {
       logsChunk0.length === chunk0.rows.length &&
       logsChunk0.every((l) => l.transactionHash === receipt.transactionHash);
     const chunk1Empty = logsChunk1.length === 0;
-    const pass = chunk0Found && chunk1Empty;
+    const pass = reconciled && chunk0Found && chunk1Empty;
     return {
       pass,
       reason: pass
-        ? `120 rows → chunks [100, 20]; chunk 0 sent (tx ${explorer(receipt.transactionHash)}), memo-log query finds all ${logsChunk0.length} chunk-0 memoIds; the same query for chunk 1's memoIds is empty (idempotency proven)`
-        : `chunk0 memo logs=${logsChunk0.length}/${chunk0.rows.length}, chunk1 memo logs=${logsChunk1.length} (expected 0)`,
+        ? `120 rows → chunks [100, 20]; chunk 0 sent (tx ${explorer(receipt.transactionHash)}), all ${rec.entries.length} rows RECONCILED, memo-log query finds all ${logsChunk0.length} chunk-0 memoIds; the same query for chunk 1's memoIds is empty (idempotency proven)`
+        : `reconciled=${reconciled} (entries=${rec.entries.length}/${chunk0.rows.length}), chunk0 memo logs=${logsChunk0.length}/${chunk0.rows.length}, chunk1 memo logs=${logsChunk1.length} (expected 0)`,
     };
   });
 
@@ -414,7 +427,8 @@ async function main() {
     if (eurcBal === 0n) {
       return {
         pass: true,
-        reason: 'SKIP — signer has 0 EURC balance (fund via faucet.circle.com to exercise this test)',
+        skip: true,
+        reason: 'signer has 0 EURC balance (fund via faucet.circle.com to exercise this test)',
       };
     }
     const runId = newRunId();

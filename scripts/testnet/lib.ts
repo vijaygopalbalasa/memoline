@@ -119,27 +119,33 @@ export async function mapLimit<T, R>(items: T[], limit: number, fn: (item: T) =>
   return results;
 }
 
-export type TestOutcome = { id: string; pass: boolean; reason: string };
+/** `skip` is only ever set alongside `pass: true` (a skipped test made no assertion, so it can't
+ * have failed) — it exists so a skip renders and counts as its own outcome instead of being
+ * silently folded into PASS, which would let a broken funding/precondition check "pass" forever. */
+export type TestOutcome = { id: string; pass: boolean; skip?: boolean; reason: string };
 
 /**
- * Minimal PASS/FAIL harness shared by the acceptance scripts: `record` prints one line as each test
- * finishes, `run` wraps a test body so a thrown error becomes a FAIL instead of aborting the whole
- * script (later tests that depend on an earlier result skip themselves via the `undefined` return),
- * and `summarize` prints the final table and returns whether every test passed.
+ * Minimal PASS/FAIL/SKIP harness shared by the acceptance scripts: `record` prints one line as each
+ * test finishes, `run` wraps a test body so a thrown error becomes a FAIL instead of aborting the
+ * whole script (later tests that depend on an earlier result skip themselves via the `undefined`
+ * return), and `summarize` prints the final table and returns whether every test passed — SKIPs are
+ * reported and counted separately from PASSes but never affect the exit code, since only `!pass`
+ * (an actual FAIL) does.
  */
 export function createHarness() {
   const results: TestOutcome[] = [];
-  function record(id: string, pass: boolean, reason: string): void {
-    results.push({ id, pass, reason });
-    console.log(`${pass ? 'PASS' : 'FAIL'} ${id} — ${reason}`);
+  function record(id: string, pass: boolean, reason: string, skip = false): void {
+    results.push({ id, pass, skip, reason });
+    const glyph = skip ? 'SKIP' : pass ? 'PASS' : 'FAIL';
+    console.log(`${glyph} ${id} — ${reason}`);
   }
   async function run<V>(
     id: string,
-    fn: () => Promise<{ pass: boolean; reason: string; value?: V }>,
+    fn: () => Promise<{ pass: boolean; reason: string; value?: V; skip?: boolean }>,
   ): Promise<V | undefined> {
     try {
       const outcome = await fn();
-      record(id, outcome.pass, outcome.reason);
+      record(id, outcome.pass, outcome.reason, outcome.skip ?? false);
       return outcome.pass ? outcome.value : undefined;
     } catch (e) {
       record(id, false, `threw: ${(e as Error).message}`);
@@ -148,9 +154,14 @@ export function createHarness() {
   }
   function summarize(): boolean {
     console.log('\n--- summary ---');
-    for (const r of results) console.log(`${r.pass ? 'PASS' : 'FAIL'}  ${r.id.padEnd(6)} ${r.reason}`);
+    for (const r of results) {
+      const glyph = r.skip ? 'SKIP' : r.pass ? 'PASS' : 'FAIL';
+      console.log(`${glyph}  ${r.id.padEnd(6)} ${r.reason}`);
+    }
+    const skipped = results.filter((r) => r.skip).length;
     const failed = results.filter((r) => !r.pass).length;
-    console.log(`\n${results.length - failed}/${results.length} passed`);
+    const passed = results.length - skipped - failed;
+    console.log(`\n${passed} passed, ${skipped} skipped, ${failed} failed`);
     return failed === 0;
   }
   return { results, record, run, summarize };

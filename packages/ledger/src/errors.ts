@@ -211,14 +211,18 @@ export function mapRpcError(e: unknown, ctx: { chunkRows?: number } = {}): Ledge
   if (code === 429 || code === -32005 || /status:\s*429|too many requests|rate limit/i.test(text))
     return ledgerError('RPC_RATE_LIMITED', text);
   if (code === 4444 || /pruned history/i.test(text)) return ledgerError('RPC_HISTORY_UNAVAILABLE', text);
-  // The -32602 + "range" rule is the original (generic JSON-RPC) shape. Code 35 and the wordier
-  // patterns are what dRPC's free tier returns for its (undocumented, much smaller than its own
-  // error message claims) log-range cap — e.g. "ranges over 10000 blocks are not supported on free
-  // plan" while the range that actually fails is closer to 500 blocks.
+  // The -32602 + "range" rule is the original (generic JSON-RPC) shape. `code === 35` is what dRPC's
+  // free tier returns for its (undocumented, much smaller than its own error message claims)
+  // log-range cap — but code 35 alone has no fixed meaning across providers, and `mapRpcError` is
+  // also used around eth_call/eth_estimateGas (`preflightChunk`), so it's corroborated with text the
+  // same way -32602 is, rather than trusted bare (an unrelated code-35 error would otherwise be
+  // mislabelled RPC_RANGE_TOO_LARGE and hide its real cause). The text-only alternatives are
+  // deliberately narrow — no bare "block range" — so a generic "invalid block range" (a nonexistent
+  // block, not an over-large range) doesn't false-positive here.
   if (
     (code === -32602 && /range/i.test(text)) ||
-    code === 35 ||
-    /ranges? over \d+ blocks|block range|range too (large|wide)|exceeds (the )?max(imum)? (allowed )?range/i.test(
+    (code === 35 && /range|block/i.test(text)) ||
+    /ranges? over \d+ blocks|range too (large|wide)|exceeds (the )?max(imum)? (allowed )?range|query returned more than \d+ results/i.test(
       text,
     )
   ) {

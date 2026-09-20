@@ -94,6 +94,14 @@ describe('mapRpcError', () => {
       mapRpcError({ code: 35, details: 'ranges over 10000 blocks are not supported on free plan' }).code,
     ).toBe('RPC_RANGE_TOO_LARGE');
   });
+  it('requires text corroboration for code 35 (an unrelated code-35 error is not mislabelled a range error)', () => {
+    const code = mapRpcError({ code: 35, message: 'execution reverted' }).code;
+    expect(code).not.toBe('RPC_RANGE_TOO_LARGE');
+    expect(['TX_REVERTED', 'UNKNOWN']).toContain(code);
+  });
+  it('does not treat a generic "invalid block range" (e.g. a nonexistent block, not an over-large range) as RPC_RANGE_TOO_LARGE', () => {
+    expect(mapRpcError({ message: 'invalid block range' }).code).toBe('UNKNOWN');
+  });
   it('maps a sustained-paging rate limit (code -32005, "rate limit exceeded") to RPC_RATE_LIMITED', () => {
     expect(mapRpcError({ code: -32005, details: 'rate limit exceeded' }).code).toBe('RPC_RATE_LIMITED');
   });
