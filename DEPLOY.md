@@ -11,7 +11,7 @@ all still to do (see `PROGRESS.md`). Follow it in order; each step assumes the o
 | 1 | **GitHub org** (e.g. `memoline`) | Hosts the public repo; GitHub Actions runs `.github/workflows/ci.yml` (lint/typecheck/test) on push. |
 | 2 | **Domain** (e.g. `memoline.io`) | The canonical production URL — becomes `NEXT_PUBLIC_APP_URL` and the SIWE sign-in domain. Attach it to the Vercel project once created. |
 | 3 | **Neon** ([neon.tech](https://neon.tech), free tier) | Serverless Postgres for `DATABASE_URL`. Use the **pooled** connection string (`-pooler` in the hostname) — the app opens a connection pool per serverless instance. |
-| 4 | **Alchemy** — Arc **mainnet and testnet** apps | An archive-node key for `ARC_RPC_PRIMARY`/`ARC_TESTNET_RPC_PRIMARY`, recommended for any real Import volume. Where the public defaults in `.env.example` stand today: the un-keyed primary (`rpc.mainnet.arc.io`) itself hangs on a wide `eth_getLogs` range with no error (`OPEN_QUESTIONS.md` §8b) rather than rejecting it cleanly; the **fallback this app actually ships with is QuickNode's public mainnet mirror**, which does serve wide ranges (a shared, unauthenticated endpoint, so still rate-limited under load). **dRPC is not configured anywhere in this app** — it's called out in code comments (`packages/ledger/src/chain/client.ts`) purely as a provider to avoid if you're picking your own: its free tier caps `eth_getLogs` at roughly 100 blocks in practice, well under what it advertises. |
+| 4 | **Alchemy** — Arc **mainnet and testnet** apps | An archive-node key for `ARC_RPC_PRIMARY`/`ARC_TESTNET_RPC_PRIMARY` — **effectively required, not just recommended, for Import to be useful.** The anonymous Import path is bounded to a 20 s wall-clock deadline (see README § Known limits); against the public fallback that deadline can trip after scanning only a small fraction of the intended ~200,000-block window, so most anonymous imports against an un-keyed RPC come back partial (`complete: false`). Where the public defaults in `.env.example` stand today: the un-keyed primary (`rpc.mainnet.arc.io`) itself hangs on a wide `eth_getLogs` range with no error (`OPEN_QUESTIONS.md` §8b) rather than rejecting it cleanly; the **fallback this app actually ships with is QuickNode's public mainnet mirror**, which does serve wide ranges but is a shared, unauthenticated endpoint that rate-limits (and thus halves the pager's page size) under load — a keyed provider is what actually makes Import fast enough to finish within the deadline. **dRPC is not configured anywhere in this app** — it's called out in code comments (`packages/ledger/src/chain/client.ts`) purely as a provider to avoid if you're picking your own: its free tier caps `eth_getLogs` at roughly 100 blocks in practice, well under what it advertises. |
 | 5 | **Reown / WalletConnect Cloud** ([reown.com](https://reown.com), free) | A project id for `WALLETCONNECT_PROJECT_ID`, required by RainbowKit for WalletConnect/mobile wallet support. |
 | 6 | **Vercel** | Hosting, the `/api/cron/imports` cron job, and env var storage. |
 
@@ -44,6 +44,11 @@ Run once against the Neon database, and again after any migration is added later
 ```bash
 DATABASE_URL="<neon pooled url>" pnpm --filter @memoline/web db:migrate
 ```
+
+**`DATABASE_URL` must be exported in the shell** (as above, or via `export DATABASE_URL=...` beforehand) —
+`drizzle-kit migrate` reads `process.env` directly and does **not** load `apps/web/.env.local`, so having it
+set there alone is not enough and the command fails confusingly (hit this running locally: it needs the
+variable present in the shell's own environment, not just the app's env file).
 
 Migrations live in `apps/web/src/db/drizzle/` (Drizzle Kit). They are additive-only in this cycle — see
 Rollback below.

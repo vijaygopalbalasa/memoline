@@ -11,8 +11,22 @@ export type FetchOptions = {
   fromBlock: bigint;
   toBlock: bigint;
   onPage?: (p: { from: bigint; to: bigint; logs: number }) => void;
+  /**
+   * Evaluated after each successful page (never mid-page — halving/retries within a page always run
+   * to completion first). Returning true stops paging and makes `fetchAddressLogs` return normally
+   * with `complete: false`, instead of the caller having to abort via a thrown error that discards
+   * every page already collected. `nextFromBlock` is the block the next page would have started at.
+   */
+  stopWhen?: (p: { elapsedMs: number; pages: number; logs: number; nextFromBlock: bigint }) => boolean;
   sleepMs?: number;
   maxAttempts?: number;
+};
+export type FetchResult = {
+  logs: Log[];
+  /** The last block actually covered by a completed page. Equals `toBlock` iff `complete`. */
+  scannedToBlock: bigint;
+  /** Whether paging reached `toBlock` (false when `stopWhen` cut it short). */
+  complete: boolean;
 };
 
 const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
@@ -109,8 +123,12 @@ async function callWithRetry(
  * exhausted. An exhausted `UNKNOWN`/`RPC_RANGE_TOO_LARGE` only gives up once the page is already at its
  * floor and still fails. Any other code (`RPC_FORBIDDEN`, `RPC_HISTORY_UNAVAILABLE`, …) is not retryable
  * and fails fast, carrying that code and its `nextStep` — it is never mistaken for a halvable range error.
+ *
+ * Returns `{ logs, scannedToBlock, complete }` rather than a bare array so a caller with `stopWhen` (e.g.
+ * a deadline or a log-count ceiling) gets back everything collected up to that point instead of having to
+ * throw and lose it — `complete` tells them whether `toBlock` was actually reached.
  */
-export async function fetchAddressLogs(client: FetchClient, o: FetchOptions): Promise<Log[]> {
+export async function fetchAddressLogs(client: FetchClient, o: FetchOptions): Promise<FetchResult> {
   if (o.fromBlock > o.toBlock) throw new Error(`invalid block range ${o.fromBlock}..${o.toBlock}`);
   const a = ADDRESSES[o.chainId];
   const out: Log[] = [];
@@ -119,6 +137,9 @@ export async function fetchAddressLogs(client: FetchClient, o: FetchOptions): Pr
   const max = BigInt(PARAMS.logPageBlocks.max);
   const maxAttempts = o.maxAttempts ?? 12;
   const sleepMs = o.sleepMs ?? 500;
+  const start = Date.now();
+  let pages = 0;
+  let scannedToBlock = o.fromBlock;
   let from = o.fromBlock;
 
   while (from <= o.toBlock) {
@@ -179,8 +200,13 @@ export async function fetchAddressLogs(client: FetchClient, o: FetchOptions): Pr
       }
       out.push(...pageLogs);
       o.onPage?.({ from, to, logs: n });
+      scannedToBlock = to;
+      pages++;
       from = to + 1n;
       if (page < max) page = page * 2n > max ? max : page * 2n;
+      if (o.stopWhen?.({ elapsedMs: Date.now() - start, pages, logs: out.length, nextFromBlock: from })) {
+        return { logs: out, scannedToBlock, complete: from > o.toBlock };
+      }
     } catch (e) {
       if (!(e instanceof FetchGiveUp)) throw e;
       const { ledger } = e;
@@ -194,5 +220,5 @@ export async function fetchAddressLogs(client: FetchClient, o: FetchOptions): Pr
       );
     }
   }
-  return out;
+  return { logs: out, scannedToBlock, complete: true };
 }

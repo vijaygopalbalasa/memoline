@@ -20,10 +20,12 @@ it only moves and reconciles USDC/EURC that are already on Arc.
 
 `/import` reconciles any Arc address — including ones you don't control — into a read-only ledger view:
 paste an address, get back a reconciled list of USDC/EURC movements with references and fees. Nothing is
-stored: an anonymous import runs entirely in the request and covers the last 7 days or 2,000 entries,
-whichever comes first (see [Known limits](#known-limits)). Signing in additionally lets a workspace start a
-**stored** import that keeps paging further back in the background (a Vercel cron job continues it in
-bounded steps) and persists to that workspace's ledger.
+stored: an anonymous import runs entirely in the request and covers the most recent ~200,000 blocks
+(~28 h) or 2,000 entries, whichever comes first, and is best-effort against a public RPC — it always
+returns whatever it actually scanned within a 20 s deadline rather than hanging (see
+[Known limits](#known-limits)). Signing in additionally lets a workspace start a **stored** import that
+keeps paging further back in the background (a Vercel cron job continues it in bounded steps) and persists
+to that workspace's ledger with full history.
 
 ## Arc features used
 
@@ -69,8 +71,12 @@ ERC-8183 escrow slice are future work, not part of this build.
 
 - **EOA senders only.** The CallFrom precompile that Memo/Multicall3From rely on requires the caller to be
   `tx.origin`; a smart-contract wallet (Safe, ERC-4337 account) cannot be the sender of a Memo'd payout.
-- **Anonymous import is bounded.** No sign-in, nothing stored — but capped at the last 7 days or 2,000
-  entries (and 500 enriched receipts, 5,000 raw logs) per address, whichever limit is hit first.
+- **Anonymous import is bounded and best-effort.** No sign-in, nothing stored — capped at the most recent
+  ~200,000 blocks (~28 h) or 2,000 entries (and 500 enriched receipts, 5,000 raw logs) per address,
+  whichever limit is hit first, and at a 20 s deadline against whichever public RPC is configured. On a
+  slow/rate-limited public RPC the scan can stop before reaching the full window; the response always says
+  how far it actually got (`scannedToBlock`, `complete`) rather than hanging. Sign in for full history via
+  a stored import, or configure a provider RPC key (see [DEPLOY.md](DEPLOY.md)) for a faster anonymous scan.
 - **Fees are not imported for non-transfer transactions.** Import only attributes a gas fee to entries it
   reconciles from Memo/Transfer logs; other activity by the same address isn't priced into the ledger.
 - **EURC is implemented but untested against a live transfer** — see Status.

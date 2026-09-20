@@ -115,7 +115,7 @@ function assertContiguousCoverage(
 describe('fetchAddressLogs adaptive paging', () => {
   it('halves the page on range errors, covers the whole span without gaps or overlap, and issues exactly the five expected queries per page', async () => {
     const { client, calls } = mockClient({ maxRange: 30_000n });
-    await fetchAddressLogs(client, {
+    const result = await fetchAddressLogs(client, {
       chainId: CHAIN,
       address: TARGET,
       fromBlock: 1_000n,
@@ -124,6 +124,8 @@ describe('fetchAddressLogs adaptive paging', () => {
     });
     const ranges = assertFiveQueriesPerPage(calls, 30_000n, TARGET);
     assertContiguousCoverage(ranges, 1_000n, 120_999n);
+    expect(result.complete).toBe(true);
+    expect(result.scannedToBlock).toBe(120_999n);
   });
 
   it('falls back to page halving on a persistent UNKNOWN error (a provider-specific "range too large" the mapper does not recognise) and still completes with contiguous coverage', async () => {
@@ -132,7 +134,7 @@ describe('fetchAddressLogs adaptive paging', () => {
       failCode: -32600,
       failMessage: 'response size exceeded',
     });
-    await fetchAddressLogs(client, {
+    const result = await fetchAddressLogs(client, {
       chainId: CHAIN,
       address: TARGET,
       fromBlock: 1_000n,
@@ -141,19 +143,61 @@ describe('fetchAddressLogs adaptive paging', () => {
     });
     const ranges = assertFiveQueriesPerPage(calls, 30_000n, TARGET);
     assertContiguousCoverage(ranges, 1_000n, 120_999n);
+    expect(result.complete).toBe(true);
+    expect(result.scannedToBlock).toBe(120_999n);
   });
 
   it('retries on 429 with backoff and still completes', async () => {
     const { client, calls } = mockClient({ maxRange: 10n ** 9n, failEvery: 2 });
-    const logs = await fetchAddressLogs(client, {
+    const result = await fetchAddressLogs(client, {
       chainId: CHAIN,
       address: TARGET,
       fromBlock: 0n,
       toBlock: 999n,
       sleepMs: 0,
     });
-    expect(logs).toEqual([]);
+    expect(result.logs).toEqual([]);
+    expect(result.complete).toBe(true);
+    expect(result.scannedToBlock).toBe(999n);
     expect(calls.length).toBeGreaterThan(1);
+  });
+
+  it('stops paging when stopWhen trips, returning the pages already collected with complete: false and a correct scannedToBlock', async () => {
+    const { client, calls } = mockClient({ maxRange: 30_000n });
+    const result = await fetchAddressLogs(client, {
+      chainId: CHAIN,
+      address: TARGET,
+      fromBlock: 0n,
+      toBlock: 999_999n,
+      sleepMs: 0,
+      // Page size starts at PARAMS.logPageBlocks.start (200,000) and this mock's maxRange is
+      // 30,000, so the very first page halves down before succeeding — stop right after that
+      // first successful page, well short of the 999,999 toBlock.
+      stopWhen: (p) => p.pages >= 1,
+    });
+    expect(result.complete).toBe(false);
+    expect(result.scannedToBlock).toBeLessThan(999_999n);
+    expect(result.scannedToBlock).toBeGreaterThanOrEqual(0n);
+    // Every collected page is preserved, not discarded — same five-queries-per-page shape as a
+    // full run, just fewer pages.
+    const ranges = assertFiveQueriesPerPage(calls, 30_000n, TARGET);
+    expect(ranges).toHaveLength(1);
+    expect(ranges[0]?.from).toBe(0n);
+    expect(ranges[0]?.to).toBe(result.scannedToBlock);
+  });
+
+  it('never trips stopWhen when it always returns false, and still completes with full coverage', async () => {
+    const { client } = mockClient({ maxRange: 30_000n });
+    const result = await fetchAddressLogs(client, {
+      chainId: CHAIN,
+      address: TARGET,
+      fromBlock: 1_000n,
+      toBlock: 120_999n,
+      sleepMs: 0,
+      stopWhen: () => false,
+    });
+    expect(result.complete).toBe(true);
+    expect(result.scannedToBlock).toBe(120_999n);
   });
 
   it('gives up immediately on RPC_FORBIDDEN (a Cloudflare 403) without treating it as halvable', async () => {

@@ -54,9 +54,11 @@ async function main() {
         console.log(`  fetched blocks ${p.from}..${p.to} (page size ${p.to - p.from + 1n}, ${p.logs} logs)`),
     });
     return {
-      pass: true,
-      reason: `fetched ${collected.length} logs for ${SENDER} over blocks ${fromBlock}..${head}`,
-      value: collected,
+      pass: collected.complete,
+      reason: collected.complete
+        ? `fetched ${collected.logs.length} logs for ${SENDER} over blocks ${fromBlock}..${head}`
+        : `fetch stopped early at block ${collected.scannedToBlock} (wanted ${head}) — ${collected.logs.length} logs collected so far`,
+      value: collected.logs,
     };
   });
   if (!logs) {
