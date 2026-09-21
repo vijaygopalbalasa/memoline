@@ -1,3 +1,4 @@
+import type { Log } from 'viem';
 import { describe, expect, it } from 'vitest';
 import { ADDRESSES, type FetchClient, fetchAddressLogs } from '../src/index.js';
 
@@ -249,5 +250,122 @@ describe('fetchAddressLogs adaptive paging', () => {
         toBlock: 5n,
       }),
     ).rejects.toThrow(/range/);
+  });
+});
+
+describe('fetchAddressLogs backward paging', () => {
+  it('pages backward from toBlock to fromBlock in the same adaptively-sized pages, fetched newest-first, covering the whole span without gaps or overlap', async () => {
+    const { client, calls } = mockClient({ maxRange: 30_000n });
+    const result = await fetchAddressLogs(client, {
+      chainId: CHAIN,
+      address: TARGET,
+      fromBlock: 1_000n,
+      toBlock: 120_999n,
+      sleepMs: 0,
+      direction: 'backward',
+    });
+    const ranges = assertFiveQueriesPerPage(calls, 30_000n, TARGET);
+    assertContiguousCoverage(ranges, 1_000n, 120_999n);
+    expect(result.complete).toBe(true);
+    expect(result.scannedFromBlock).toBe(1_000n);
+    expect(result.scannedToBlock).toBe(120_999n);
+    // Confirms it actually walked newest-first: every attempt of the very first page (successful or
+    // not, since the mock's maxRange forces a few halvings before the first one succeeds) has `to`
+    // pinned at the top of the span — a forward scan's first page would instead start at `from: 1_000n`.
+    expect(calls[0]?.to).toBe(120_999n);
+    const successful = calls.filter((c) => c.to - c.from + 1n <= 30_000n);
+    expect(successful[0]?.to).toBe(120_999n);
+  });
+
+  it('stops paging backward when stopWhen trips, keeping only the most recent page(s) — the ones nearest toBlock — with complete: false', async () => {
+    const { client, calls } = mockClient({ maxRange: 30_000n });
+    const result = await fetchAddressLogs(client, {
+      chainId: CHAIN,
+      address: TARGET,
+      fromBlock: 0n,
+      toBlock: 999_999n,
+      sleepMs: 0,
+      direction: 'backward',
+      // Same rationale as the forward stopWhen test: the first page halves down from
+      // PARAMS.logPageBlocks.start (200,000) to fit this mock's 30,000 maxRange, then stops right
+      // after that one successful page — well short of covering all the way down to fromBlock.
+      stopWhen: (p) => p.pages >= 1,
+    });
+    expect(result.complete).toBe(false);
+    // Backward's fixed end is toBlock — always fully covered once any page has run.
+    expect(result.scannedToBlock).toBe(999_999n);
+    expect(result.scannedFromBlock).toBeGreaterThan(0n);
+    const ranges = assertFiveQueriesPerPage(calls, 30_000n, TARGET);
+    expect(ranges).toHaveLength(1);
+    expect(ranges[0]?.to).toBe(999_999n);
+    expect(ranges[0]?.from).toBe(result.scannedFromBlock);
+  });
+
+  it('returns logs sorted ascending by (blockNumber, logIndex) even though backward paging fetches the newest pages first', async () => {
+    const pageLog = (blockNumber: bigint): Log =>
+      ({
+        blockNumber,
+        logIndex: 0,
+        transactionHash: `0x${blockNumber.toString(16).padStart(64, '0')}`,
+        address: '0x0000000000000000000000000000000000000000',
+        topics: [],
+        data: '0x',
+        blockHash: '0x0',
+        transactionIndex: 0,
+        removed: false,
+      }) as unknown as Log;
+    // No range errors here (maxRange is effectively unlimited) — the 250,000-block span still forces
+    // two pages because it's bigger than a single page's start size (200,000), letting this test stay
+    // focused on ordering rather than halving.
+    const client: FetchClient = {
+      getLogs: async (p: { fromBlock: bigint; toBlock: bigint }) => [pageLog(p.toBlock)],
+    } as unknown as FetchClient;
+    const result = await fetchAddressLogs(client, {
+      chainId: CHAIN,
+      address: TARGET,
+      fromBlock: 0n,
+      toBlock: 249_999n,
+      sleepMs: 0,
+      direction: 'backward',
+    });
+    expect(result.complete).toBe(true);
+    expect(result.scannedFromBlock).toBe(0n);
+    expect(result.scannedToBlock).toBe(249_999n);
+    const blockNumbers = result.logs.map((l) => l.blockNumber as bigint);
+    expect(blockNumbers.length).toBeGreaterThan(0);
+    const sorted = [...blockNumbers].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
+    expect(blockNumbers).toEqual(sorted);
+  });
+});
+
+describe('fetchAddressLogs deadlineAt', () => {
+  it('honours deadlineAt inside the retry path — stops before starting another query mid-page, not just between pages, and never sleeps past it', async () => {
+    let calls = 0;
+    const client: FetchClient = {
+      getLogs: async () => {
+        calls++;
+        await new Promise((resolve) => setTimeout(resolve, 20));
+        return [];
+      },
+    } as unknown as FetchClient;
+    const startedAt = Date.now();
+    const result = await fetchAddressLogs(client, {
+      chainId: CHAIN,
+      address: TARGET,
+      fromBlock: 0n,
+      toBlock: 999_999n,
+      sleepMs: 0,
+      // Shorter than a single getLogs call (20ms): the first query (of 5 in the page) is already
+      // in flight when the deadline is set, so it's allowed to finish, but the second one must never
+      // start.
+      deadlineAt: Date.now() + 15,
+    });
+    const elapsed = Date.now() - startedAt;
+    expect(result.complete).toBe(false);
+    expect(result.logs).toEqual([]);
+    expect(calls).toBe(1);
+    // Bounded by ~one in-flight request, not by paging through the 1,000,000-block window (which would
+    // need many multi-second RPC round trips against a real provider).
+    expect(elapsed).toBeLessThan(200);
   });
 });

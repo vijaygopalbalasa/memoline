@@ -12,20 +12,48 @@ export type FetchOptions = {
   toBlock: bigint;
   onPage?: (p: { from: bigint; to: bigint; logs: number }) => void;
   /**
+   * Which end of `[fromBlock, toBlock]` paging starts from. `'forward'` (the default — unchanged
+   * behaviour for the stored/cron import) starts at `fromBlock` and walks up; the fixed end of the
+   * covered range is always `fromBlock`, and `scannedToBlock` grows toward `toBlock` as pages
+   * complete. `'backward'` starts at `toBlock` and walks down; the fixed end is always `toBlock`, and
+   * `scannedFromBlock` shrinks toward `fromBlock` as pages complete. This matters when the scan can be
+   * cut short (`stopWhen` or `deadlineAt`): forward returns the oldest slice of the window, backward
+   * returns the newest — the one that matters for "paste an address, see its recent movements".
+   */
+  direction?: 'forward' | 'backward';
+  /**
    * Evaluated after each successful page (never mid-page — halving/retries within a page always run
    * to completion first). Returning true stops paging and makes `fetchAddressLogs` return normally
    * with `complete: false`, instead of the caller having to abort via a thrown error that discards
-   * every page already collected. `nextFromBlock` is the block the next page would have started at.
+   * every page already collected. `nextFromBlock` is the lower bound of the still-unscanned remainder
+   * of `[fromBlock, toBlock]` — for `'forward'` paging that's literally the next page's `fromBlock`
+   * query param; for `'backward'` paging the next page starts near the *high* end instead, so this is
+   * only the range's low edge, not the next query's own param.
    */
   stopWhen?: (p: { elapsedMs: number; pages: number; logs: number; nextFromBlock: bigint }) => boolean;
+  /**
+   * Hard wall-clock deadline (epoch ms, e.g. `Date.now() + budget`). Unlike `stopWhen` — which is only
+   * checked between completed pages — this is checked *inside* the retry path: before every query
+   * attempt (the first try of each of the 5 per-page queries, and every retry of one) and before every
+   * backoff sleep, which is also capped so it never sleeps past the deadline. Once it has passed, no
+   * further queries or sleeps happen and `fetchAddressLogs` returns immediately with whatever full
+   * pages were already collected and `complete: false` — a page already in flight when the deadline
+   * hits is never partially committed.
+   */
+  deadlineAt?: number;
   sleepMs?: number;
   maxAttempts?: number;
 };
 export type FetchResult = {
   logs: Log[];
-  /** The last block actually covered by a completed page. Equals `toBlock` iff `complete`. */
+  /** The lowest block actually covered by a completed page. Equals `fromBlock` when `complete`
+   * (always true for `'forward'`, which covers `fromBlock` from its very first page). */
+  scannedFromBlock: bigint;
+  /** The highest block actually covered by a completed page. Equals `toBlock` when `complete`
+   * (always true for `'backward'`, which covers `toBlock` from its very first page). */
   scannedToBlock: bigint;
-  /** Whether paging reached `toBlock` (false when `stopWhen` cut it short). */
+  /** Whether paging covered the whole `[fromBlock, toBlock]` span (false when `stopWhen` or
+   * `deadlineAt` cut it short). */
   complete: boolean;
 };
 
@@ -64,12 +92,49 @@ class FetchGiveUp extends Error {
   }
 }
 
+/** Thrown by `callWithRetry` (and the `boundedSleep` it uses for backoff) the moment `deadlineAt` has
+ * passed — before starting another query attempt and before sleeping past it. Caught one level up, in
+ * `fetchAddressLogs`'s per-page loop, where it means "stop now, keep only the pages already committed"
+ * rather than a real RPC failure the caller should see. */
+class DeadlineExceeded extends Error {
+  constructor() {
+    super('deadline exceeded');
+    this.name = 'DeadlineExceeded';
+  }
+}
+
 /** The raw provider text (`LedgerError.detail`), when present, appended to a give-up message — the
  * generic per-code message ("The RPC rejected the log query as too large") is the same for every
  * provider, but the detail is what actually tells you which provider and why (e.g. dRPC's
  * "ranges over 10000 blocks are not supported on free plan", which understates its own real cap). */
 function detailSuffix(ledger: LedgerError): string {
   return ledger.detail === undefined ? '' : ` (provider said: ${String(ledger.detail)})`;
+}
+
+function deadlinePassed(deadlineAt: number | undefined): boolean {
+  return deadlineAt !== undefined && Date.now() >= deadlineAt;
+}
+
+/** `sleep`, but capped so it never runs past `deadlineAt` — if the deadline has already passed (or
+ * would pass before `ms` elapses), it sleeps only the remainder, and if none is left it throws
+ * `DeadlineExceeded` immediately instead of sleeping 0ms and looping back around. */
+async function boundedSleep(ms: number, deadlineAt: number | undefined): Promise<void> {
+  if (deadlineAt === undefined) return sleep(ms);
+  const remaining = deadlineAt - Date.now();
+  if (remaining <= 0) throw new DeadlineExceeded();
+  await sleep(Math.min(ms, remaining));
+}
+
+/** Sorts by (blockNumber, logIndex) ascending, independent of the order pages were fetched in — so a
+ * `'backward'` scan (which fetches newest-first) still hands reconciliation logs in the same order a
+ * `'forward'` one always did. */
+function sortLogs(logs: Log[]): Log[] {
+  return [...logs].sort((x, y) => {
+    const xb = x.blockNumber ?? 0n;
+    const yb = y.blockNumber ?? 0n;
+    if (xb !== yb) return xb < yb ? -1 : 1;
+    return (x.logIndex ?? 0) - (y.logIndex ?? 0);
+  });
 }
 
 /**
@@ -79,15 +144,20 @@ function detailSuffix(ledger: LedgerError): string {
  * `UNKNOWN` gets a few in-place attempts, then gives up so the caller can fall back to page halving the
  * same way it does for an explicit range-too-large error. Every other code (`RPC_FORBIDDEN`,
  * `RPC_HISTORY_UNAVAILABLE`, …) is not retryable and gives up immediately on the first attempt.
+ *
+ * `deadlineAt`, when set, is checked before every attempt (including the first) and bounds every
+ * backoff sleep — see `DeadlineExceeded` / `boundedSleep`.
  */
 async function callWithRetry(
   fn: () => Promise<readonly Log[]>,
   maxAttempts: number,
   sleepMs: number,
+  deadlineAt: number | undefined,
 ): Promise<readonly Log[]> {
   let rateAttempts = 0;
   let unknownAttempts = 0;
   for (;;) {
+    if (deadlinePassed(deadlineAt)) throw new DeadlineExceeded();
     try {
       return await fn();
     } catch (e) {
@@ -96,14 +166,15 @@ async function callWithRetry(
       if (err.code === 'UNKNOWN') {
         unknownAttempts++;
         if (unknownAttempts > UNKNOWN_INPLACE_RETRIES) throw new FetchGiveUp(err);
-        await sleep(sleepMs * unknownAttempts);
+        await boundedSleep(sleepMs * unknownAttempts, deadlineAt);
         continue;
       }
       if (err.code === 'RPC_RATE_LIMITED') {
         rateAttempts++;
         if (rateAttempts > maxAttempts) throw new FetchGiveUp(err);
-        await sleep(
+        await boundedSleep(
           Math.min(sleepMs * RATE_LIMIT_BACKOFF_MULTIPLIER * rateAttempts, RATE_LIMIT_BACKOFF_CAP_MS),
+          deadlineAt,
         );
         continue;
       }
@@ -124,9 +195,14 @@ async function callWithRetry(
  * floor and still fails. Any other code (`RPC_FORBIDDEN`, `RPC_HISTORY_UNAVAILABLE`, …) is not retryable
  * and fails fast, carrying that code and its `nextStep` — it is never mistaken for a halvable range error.
  *
- * Returns `{ logs, scannedToBlock, complete }` rather than a bare array so a caller with `stopWhen` (e.g.
- * a deadline or a log-count ceiling) gets back everything collected up to that point instead of having to
- * throw and lose it — `complete` tells them whether `toBlock` was actually reached.
+ * Pages walk from `fromBlock` up (`direction: 'forward'`, the default) or from `toBlock` down
+ * (`'backward'`) in the same adaptively-sized pages either way; see `FetchOptions.direction`.
+ *
+ * Returns `{ logs, scannedFromBlock, scannedToBlock, complete }` rather than a bare array so a caller
+ * with `stopWhen` or `deadlineAt` (e.g. a deadline or a log-count ceiling) gets back everything collected
+ * up to that point instead of having to throw and lose it — `complete` tells them whether the whole span
+ * was actually reached. Logs are always returned sorted ascending by (blockNumber, logIndex), regardless
+ * of `direction`, so downstream reconciliation never has to care which way the scan walked.
  */
 export async function fetchAddressLogs(client: FetchClient, o: FetchOptions): Promise<FetchResult> {
   if (o.fromBlock > o.toBlock) throw new Error(`invalid block range ${o.fromBlock}..${o.toBlock}`);
@@ -137,13 +213,29 @@ export async function fetchAddressLogs(client: FetchClient, o: FetchOptions): Pr
   const max = BigInt(PARAMS.logPageBlocks.max);
   const maxAttempts = o.maxAttempts ?? 12;
   const sleepMs = o.sleepMs ?? 500;
+  const deadlineAt = o.deadlineAt;
+  const direction = o.direction ?? 'forward';
   const start = Date.now();
   let pages = 0;
-  let scannedToBlock = o.fromBlock;
-  let from = o.fromBlock;
 
-  while (from <= o.toBlock) {
-    const to = from + page - 1n > o.toBlock ? o.toBlock : from + page - 1n;
+  // [lo, hi] is the still-unscanned remainder of [fromBlock, toBlock]. Forward paging only ever moves
+  // `lo` up (`hi` stays `toBlock`); backward only ever moves `hi` down (`lo` stays `fromBlock`). Either
+  // way, `lo > hi` means the whole span has been covered — direction-agnostic completion check.
+  let lo = o.fromBlock;
+  let hi = o.toBlock;
+  let scannedFromBlock = direction === 'forward' ? o.fromBlock : o.toBlock;
+  let scannedToBlock = direction === 'forward' ? o.fromBlock : o.toBlock;
+
+  const finish = (complete: boolean): FetchResult => ({
+    logs: sortLogs(out),
+    scannedFromBlock,
+    scannedToBlock,
+    complete,
+  });
+
+  while (lo <= hi) {
+    const from = direction === 'forward' ? lo : hi - page + 1n < lo ? lo : hi - page + 1n;
+    const to = direction === 'forward' ? (lo + page - 1n > hi ? hi : lo + page - 1n) : hi;
     // Each closure is declared separately (not inside a pre-typed array literal): an explicit
     // `Array<() => Promise<...>>` annotation on the array would contextually type each call
     // before its `event`/`args` are inspected, and getLogs' generic overload picker would then
@@ -194,20 +286,26 @@ export async function fetchAddressLogs(client: FetchClient, o: FetchOptions): Pr
       const pageLogs: Log[] = [];
       let n = 0;
       for (const q of queries) {
-        const logs = await callWithRetry(q, maxAttempts, sleepMs);
+        const logs = await callWithRetry(q, maxAttempts, sleepMs, deadlineAt);
         pageLogs.push(...(logs as Log[]));
         n += logs.length;
       }
       out.push(...pageLogs);
       o.onPage?.({ from, to, logs: n });
-      scannedToBlock = to;
       pages++;
-      from = to + 1n;
+      if (direction === 'forward') {
+        scannedToBlock = to;
+        lo = to + 1n;
+      } else {
+        scannedFromBlock = from;
+        hi = from - 1n;
+      }
       if (page < max) page = page * 2n > max ? max : page * 2n;
-      if (o.stopWhen?.({ elapsedMs: Date.now() - start, pages, logs: out.length, nextFromBlock: from })) {
-        return { logs: out, scannedToBlock, complete: from > o.toBlock };
+      if (o.stopWhen?.({ elapsedMs: Date.now() - start, pages, logs: out.length, nextFromBlock: lo })) {
+        return finish(lo > hi);
       }
     } catch (e) {
+      if (e instanceof DeadlineExceeded) return finish(false);
       if (!(e instanceof FetchGiveUp)) throw e;
       const { ledger } = e;
       const halvable = ledger.code === 'RPC_RANGE_TOO_LARGE' || ledger.code === 'UNKNOWN';
@@ -220,5 +318,5 @@ export async function fetchAddressLogs(client: FetchClient, o: FetchOptions): Pr
       );
     }
   }
-  return { logs: out, scannedToBlock, complete: true };
+  return finish(true);
 }
