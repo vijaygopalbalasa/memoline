@@ -35,7 +35,7 @@ settings for deployment.
 | `RPC_USER_AGENT` | — | `memoline/0.1 (+https://memoline.io)` | Runtime (default works; Arc's public RPCs 403 the default Node/Python user agent) |
 | `ALLOW_7702_SENDERS` | — | `true` | Runtime (default `true`; Spike 0 verified 7702-delegated EOAs work with Memo) |
 | `CRON_SECRET` | Generate: `openssl rand -hex 32` | `a1b2...` | Runtime — required for `/api/cron/imports` to do anything; without it the endpoint returns `503` rather than running unauthenticated (see step 5) |
-| `NEXT_PUBLIC_APP_URL` | Your canonical domain | `https://memoline.io` | Runtime, **Production only** — do **not** set it for Preview. Sign-in accepts the request `Host` when it is this host *or* one of the hosts Vercel injects for the deployment (`VERCEL_PROJECT_PRODUCTION_URL`, `VERCEL_URL`, `VERCEL_BRANCH_URL`), so `*.vercel.app` and preview URLs work; any other host is rejected. Requires "Automatically expose System Environment Variables" (on by default) |
+| `NEXT_PUBLIC_APP_URL` | The canonical URL of that environment | Production `https://memoline-one.vercel.app` (later `https://memoline.io`); Preview `https://memoline-testnet.vercel.app` | Runtime. Sign-in accepts the request `Host` when it is this host *or* one of the hosts Vercel injects for the deployment (`VERCEL_PROJECT_PRODUCTION_URL`, `VERCEL_URL`, `VERCEL_BRANCH_URL`), so `*.vercel.app` and per-deployment preview URLs work too; any other host is rejected. A stable alias you point at a preview (`vercel alias set …`) is *not* one of the injected hosts, which is why Preview gets its alias here. Requires "Automatically expose System Environment Variables" (on by default) |
 
 ## 3. Database migration
 
@@ -72,9 +72,10 @@ Rollback below.
    file; Turbopack cannot follow that mapping ([next.js#82945](https://github.com/vercel/next.js/issues/82945)) — plain `next build` (Turbopack, the Next 16 default) fails on it. `apps/web/next.config.ts` documents this.
 4. **Install Command**: default (`pnpm install`) is fine.
 5. Add every environment variable from the table above under **Settings → Environment Variables**:
-   Production = mainnet (`CHAIN_ENV=mainnet`, the `production` Neon branch, `NEXT_PUBLIC_APP_URL`),
-   Preview = testnet (`CHAIN_ENV=testnet`, the `testnet` Neon branch, no `NEXT_PUBLIC_APP_URL`). A
-   preview deployment of `main` (`vercel deploy` without `--prod`) is therefore the live testnet app.
+   Production = mainnet (`CHAIN_ENV=mainnet`, the `production` Neon branch), Preview = testnet
+   (`CHAIN_ENV=testnet`, the `testnet` Neon branch), each with its own `NEXT_PUBLIC_APP_URL`. A
+   preview deployment of `main` (`vercel deploy` without `--prod`) is therefore the live testnet app;
+   `vercel alias set <deployment-url> memoline-testnet.vercel.app` keeps it on a stable URL.
 6. Deploy.
 
 ## 5. Cron
