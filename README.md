@@ -13,9 +13,10 @@ it only moves and reconciles USDC/EURC that are already on Arc.
 2. **Sign in** with SIWE (a free signature, no gas).
 3. **Paste a CSV** (`recipient,amount,reference`, one row per payment).
 4. Review **validation** results (bad checksums, duplicate recipients/references, amount limits).
-5. Run **pre-flight** — one simulated call that shows every row that would fail before anything is sent.
-6. **Sign** each chunk in your wallet, reading the safety panel first (network, contract, total, row
-   count, estimated fee).
+5. **Check the batch on Arc** — your balance is checked against the total and every payment is
+   simulated from your address; anything that would fail is set aside with its reason before you sign.
+6. **Sign** each transaction (up to 100 payments) in your wallet, reading the review panel first
+   (total, count, network, contract, estimated gas).
 7. Watch the run reconcile from the transaction receipt, then **export** the run and ledger as CSV/JSON.
 
 ## Import
@@ -55,20 +56,25 @@ to that workspace's ledger with full history.
 
 ## Status
 
-Verified on **Arc Testnet** (chain `5042002`), never on mainnet:
+**Live on Arc mainnet** (chain `5042`) at https://memoline-one.vercel.app, with a testnet twin at
+https://memoline-testnet.vercel.app (chain `5042002`). Every push to `main` redeploys production.
+
+Verified end to end:
 
 - **Spike 0** — Mode A (Multicall3From → Memo preserves the EOA sender) confirmed on-chain; ~53k gas per
   row; 100 rows/tx set as the batch cap; EIP-7702-delegated senders work.
-- **`payout-e2e` acceptance suite** (`scripts/testnet/payout-e2e.ts`, T1–T10): **9 passed, 1 skipped
-  (T8, EURC — the signer holds no testnet EURC), 0 failed.**
-- **`import-e2e` acceptance suite** (`scripts/testnet/import-e2e.ts`): **5/5 passed** — 173 entries
-  reconciled from the signer's own live testnet transaction history.
-- **225 unit/integration tests** across `packages/ledger` and `apps/web` (`pnpm test`): 224 passed, 1
-  skipped (the same EURC fixture gap).
+- **`payout-e2e` acceptance suite** (`scripts/testnet/payout-e2e.ts`, T1–T10): **10 passed, 0 skipped,
+  0 failed** on Arc Testnet, including a live EURC payout (T8).
+- **`import-e2e` acceptance suite** (`scripts/testnet/import-e2e.ts`): **5/5 passed** against the
+  signer's live testnet history.
+- **Manual wallet run on the deployed testnet app (2026-09-22):** a 3-row payout and a 120-row payout
+  (two transactions) signed in MetaMask; the kill-the-tab, two-tabs-racing, reject-in-wallet and
+  wrong-network paths exercised by hand; exports opened in a spreadsheet and tied out.
+- **288 unit/integration tests** across `packages/ledger` and `apps/web` (`pnpm test`), plus the same
+  web suite on a real PostgreSQL 17 with connection contention (CI runs both).
 
-Not yet done: no mainnet deployment, no mainnet transaction. The EURC path is implemented and unit-tested
-but has never reconciled a live token movement (no testnet EURC was available). Payment links and the
-ERC-8183 escrow slice are future work, not part of this build.
+Not yet done: the 5-USDC mainnet smoke payout (`scripts/mainnet/smoke.ts`, human-run). Payment links and
+the ERC-8183 escrow slice are future work, not part of this build.
 
 ## Known limits
 
@@ -82,9 +88,11 @@ ERC-8183 escrow slice are future work, not part of this build.
   address's newest activity instead of its oldest. The response always says how far it actually got
   (`scannedFromBlock`, `scannedToBlock`, `complete`) rather than hanging. Sign in for full history via a
   stored import, or configure a provider RPC key (see [DEPLOY.md](DEPLOY.md)) for a faster anonymous scan.
-- **Fees are not imported for non-transfer transactions.** Import only attributes a gas fee to entries it
-  reconciles from Memo/Transfer logs; other activity by the same address isn't priced into the ledger.
-- **EURC is implemented but untested against a live transfer** — see Status.
+- **Import prices gas per transaction the address paid for.** Gas is split pro rata across that
+  transaction's lines (the same rule the payout side uses); a transaction the address paid for that moved
+  no USDC/EURC of its own gets a gas-only line so the fee still appears in the books.
+- **Stored imports advance in steps.** Each "Continue import" on the ledger page reads another stretch of
+  the chain; on the Vercel Hobby plan the automatic continuation runs once a day.
 
 ## Run it locally
 
@@ -116,7 +124,8 @@ See `.env.example` for the full, current list with defaults and explanations.
 ## Tests
 
 ```bash
-pnpm test        # 225 unit/integration tests, packages/ledger + apps/web, no network access
+pnpm test        # 288 unit/integration tests, packages/ledger + apps/web, no network access
+TEST_DATABASE_URL=postgres://localhost/postgres pnpm --filter @memoline/web test   # same suite on real Postgres
 pnpm lint         # Biome
 pnpm typecheck    # strict TypeScript, every workspace
 ```
