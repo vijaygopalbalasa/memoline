@@ -186,7 +186,7 @@ async function callWithRetry(
 
 /**
  * All logs relevant to an address: system-emitter Transfer (from/to), EURC Transfer (from/to), Memo (sender).
- * Adaptive paging: start big (indexed-arg filters are sparse), halve the page on "range too large" (or a
+ * Adaptive paging: start at the largest range Arc's history providers accept (`PARAMS.logPageBlocks`), halve the page on "range too large" (or a
  * persistent `UNKNOWN` — some providers reject an oversized range with a code/message we don't recognise)
  * and retry the whole page at the smaller size, grow the page back on success. A rate-limit error retries
  * just the one failing call in place (same range) with linear backoff, so an intermittent 429 doesn't force
@@ -205,37 +205,8 @@ async function callWithRetry(
  * of `direction`, so downstream reconciliation never has to care which way the scan walked.
  */
 export async function fetchAddressLogs(client: FetchClient, o: FetchOptions): Promise<FetchResult> {
-  if (o.fromBlock > o.toBlock) throw new Error(`invalid block range ${o.fromBlock}..${o.toBlock}`);
   const a = ADDRESSES[o.chainId];
-  const out: Log[] = [];
-  let page = BigInt(PARAMS.logPageBlocks.start);
-  const min = BigInt(PARAMS.logPageBlocks.min);
-  const max = BigInt(PARAMS.logPageBlocks.max);
-  const maxAttempts = o.maxAttempts ?? 12;
-  const sleepMs = o.sleepMs ?? 500;
-  const deadlineAt = o.deadlineAt;
-  const direction = o.direction ?? 'forward';
-  const start = Date.now();
-  let pages = 0;
-
-  // [lo, hi] is the still-unscanned remainder of [fromBlock, toBlock]. Forward paging only ever moves
-  // `lo` up (`hi` stays `toBlock`); backward only ever moves `hi` down (`lo` stays `fromBlock`). Either
-  // way, `lo > hi` means the whole span has been covered — direction-agnostic completion check.
-  let lo = o.fromBlock;
-  let hi = o.toBlock;
-  let scannedFromBlock = direction === 'forward' ? o.fromBlock : o.toBlock;
-  let scannedToBlock = direction === 'forward' ? o.fromBlock : o.toBlock;
-
-  const finish = (complete: boolean): FetchResult => ({
-    logs: sortLogs(out),
-    scannedFromBlock,
-    scannedToBlock,
-    complete,
-  });
-
-  while (lo <= hi) {
-    const from = direction === 'forward' ? lo : hi - page + 1n < lo ? lo : hi - page + 1n;
-    const to = direction === 'forward' ? (lo + page - 1n > hi ? hi : lo + page - 1n) : hi;
+  return pageBlockRange(o, async (from, to, retry) => {
     // Each closure is declared separately (not inside a pre-typed array literal): an explicit
     // `Array<() => Promise<...>>` annotation on the array would contextually type each call
     // before its `event`/`args` are inspected, and getLogs' generic overload picker would then
@@ -280,18 +251,101 @@ export async function fetchAddressLogs(client: FetchClient, o: FetchOptions): Pr
         fromBlock: from,
         toBlock: to,
       });
-    const queries = [q1, q2, q3, q4, q5];
+    const pageLogs: Log[] = [];
+    for (const q of [q1, q2, q3, q4, q5]) pageLogs.push(...((await retry(q)) as Log[]));
+    return pageLogs;
+  });
+}
 
+export type PagedLogsOptions = Pick<
+  FetchOptions,
+  'fromBlock' | 'toBlock' | 'direction' | 'stopWhen' | 'deadlineAt' | 'sleepMs' | 'maxAttempts' | 'onPage'
+>;
+
+/**
+ * One arbitrary `getLogs` filter, walked over `[fromBlock, toBlock]` with the same adaptive paging,
+ * retry and deadline engine as `fetchAddressLogs`. For callers that need a log query over a span that
+ * can outgrow a provider's range cap but isn't an address history — e.g. the run-side "did this
+ * chunk's memoIds already land?" check, which scans from the run's start block to the head and so
+ * grows past 10,000 blocks (~83 minutes of Arc at 0.5 s blocks) for any run left open that long.
+ * `filter` is everything except the block bounds, which the pager supplies per page.
+ */
+export async function getLogsPaged(
+  client: FetchClient,
+  filter: Omit<Parameters<FetchClient['getLogs']>[0], 'fromBlock' | 'toBlock' | 'blockHash'>,
+  o: PagedLogsOptions,
+): Promise<FetchResult> {
+  return pageBlockRange(o, async (from, to, retry) => {
+    // The cast keeps viem's event/args overload pairing intact: the caller built `filter` against a
+    // concrete event, and re-spreading it with block bounds must not widen it to the untyped branch.
+    const logs = await retry(() =>
+      client.getLogs({ ...filter, fromBlock: from, toBlock: to } as Parameters<FetchClient['getLogs']>[0]),
+    );
+    return logs as Log[];
+  });
+}
+
+type PageFetcher = (
+  from: bigint,
+  to: bigint,
+  retry: (fn: () => Promise<readonly Log[]>) => Promise<readonly Log[]>,
+) => Promise<Log[]>;
+
+/**
+ * The paging engine behind `fetchAddressLogs` and `getLogsPaged`: walks `[fromBlock, toBlock]` in
+ * adaptively-sized pages, calling `fetchPage(from, to, retry)` for each one. `retry` is the in-place
+ * retry wrapper (`callWithRetry`) the page function must route every RPC call through, so a rate limit
+ * on one call retries just that call and a range rejection escalates to a page halve for the whole page.
+ *
+ * Page sizing: start at `PARAMS.logPageBlocks.start`, halve on a range rejection (or an `UNKNOWN`
+ * that outlasted its in-place retries), and grow back on success only until the first rejection —
+ * after that `ceiling` pins growth at the halved size that then worked. Without that memory the
+ * pager oscillates: every success doubles the page straight back into the size that just failed,
+ * costing a rejected call (and a wasted round trip on a rate-limited endpoint) for every page it
+ * fetches. Settling at the first size that works, rather than binary-searching for the provider's
+ * exact cap, trades at most ~2× more pages for zero further rejections.
+ *
+ * Deadline/stop semantics, `scannedFromBlock`/`scannedToBlock`, direction and the sorted result are
+ * exactly as documented on `FetchOptions`/`FetchResult`.
+ */
+async function pageBlockRange(o: PagedLogsOptions, fetchPage: PageFetcher): Promise<FetchResult> {
+  if (o.fromBlock > o.toBlock) throw new Error(`invalid block range ${o.fromBlock}..${o.toBlock}`);
+  const out: Log[] = [];
+  let page = BigInt(PARAMS.logPageBlocks.start);
+  const min = BigInt(PARAMS.logPageBlocks.min);
+  const max = BigInt(PARAMS.logPageBlocks.max);
+  // Growth cap: `max` until a provider rejects a page, then the halved size that replaced it.
+  let ceiling = max;
+  const maxAttempts = o.maxAttempts ?? 12;
+  const sleepMs = o.sleepMs ?? 500;
+  const deadlineAt = o.deadlineAt;
+  const direction = o.direction ?? 'forward';
+  const start = Date.now();
+  let pages = 0;
+  const retry = (fn: () => Promise<readonly Log[]>) => callWithRetry(fn, maxAttempts, sleepMs, deadlineAt);
+
+  // [lo, hi] is the still-unscanned remainder of [fromBlock, toBlock]. Forward paging only ever moves
+  // `lo` up (`hi` stays `toBlock`); backward only ever moves `hi` down (`lo` stays `fromBlock`). Either
+  // way, `lo > hi` means the whole span has been covered — direction-agnostic completion check.
+  let lo = o.fromBlock;
+  let hi = o.toBlock;
+  let scannedFromBlock = direction === 'forward' ? o.fromBlock : o.toBlock;
+  let scannedToBlock = direction === 'forward' ? o.fromBlock : o.toBlock;
+
+  const finish = (complete: boolean): FetchResult => ({
+    logs: sortLogs(out),
+    scannedFromBlock,
+    scannedToBlock,
+    complete,
+  });
+
+  while (lo <= hi) {
+    const from = direction === 'forward' ? lo : hi - page + 1n < lo ? lo : hi - page + 1n;
+    const to = direction === 'forward' ? (lo + page - 1n > hi ? hi : lo + page - 1n) : hi;
     try {
-      const pageLogs: Log[] = [];
-      let n = 0;
-      for (const q of queries) {
-        const logs = await callWithRetry(q, maxAttempts, sleepMs, deadlineAt);
-        pageLogs.push(...(logs as Log[]));
-        n += logs.length;
-      }
+      const pageLogs = await fetchPage(from, to, retry);
       out.push(...pageLogs);
-      o.onPage?.({ from, to, logs: n });
+      o.onPage?.({ from, to, logs: pageLogs.length });
       pages++;
       if (direction === 'forward') {
         scannedToBlock = to;
@@ -300,7 +354,8 @@ export async function fetchAddressLogs(client: FetchClient, o: FetchOptions): Pr
         scannedFromBlock = from;
         hi = from - 1n;
       }
-      if (page < max) page = page * 2n > max ? max : page * 2n;
+      const cap = ceiling < max ? ceiling : max;
+      if (page < cap) page = page * 2n > cap ? cap : page * 2n;
       if (o.stopWhen?.({ elapsedMs: Date.now() - start, pages, logs: out.length, nextFromBlock: lo })) {
         return finish(lo > hi);
       }
@@ -311,6 +366,7 @@ export async function fetchAddressLogs(client: FetchClient, o: FetchOptions): Pr
       const halvable = ledger.code === 'RPC_RANGE_TOO_LARGE' || ledger.code === 'UNKNOWN';
       if (halvable && page > min) {
         page = page / 2n < min ? min : page / 2n;
+        ceiling = page;
         continue;
       }
       throw new Error(

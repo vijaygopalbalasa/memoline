@@ -11,7 +11,7 @@ all still to do (see `PROGRESS.md`). Follow it in order; each step assumes the o
 | 1 | **GitHub org** (e.g. `memoline`) | Hosts the public repo; GitHub Actions runs `.github/workflows/ci.yml` (lint/typecheck/test) on push. |
 | 2 | **Domain** (e.g. `memoline.io`) | The canonical production URL — becomes `NEXT_PUBLIC_APP_URL` and the SIWE sign-in domain. Attach it to the Vercel project once created. |
 | 3 | **Neon** ([neon.tech](https://neon.tech), free tier) | Serverless Postgres for `DATABASE_URL`. Use the **pooled** connection string (`-pooler` in the hostname) — the app opens a connection pool per serverless instance. |
-| 4 | **Alchemy** — Arc **mainnet and testnet** apps | An archive-node key for `ARC_RPC_PRIMARY`/`ARC_TESTNET_RPC_PRIMARY` — **effectively required, not just recommended, for Import to be useful.** The anonymous Import path is bounded to a 20 s wall-clock deadline (see README § Known limits); against the public fallback that deadline can trip after scanning only a small fraction of the intended ~200,000-block window, so most anonymous imports against an un-keyed RPC come back partial (`complete: false`). Where the public defaults in `.env.example` stand today: the un-keyed primary (`rpc.mainnet.arc.io`) itself hangs on a wide `eth_getLogs` range with no error (`OPEN_QUESTIONS.md` §8b) rather than rejecting it cleanly; the **fallback this app actually ships with is QuickNode's public mainnet mirror**, which does serve wide ranges but is a shared, unauthenticated endpoint that rate-limits (and thus halves the pager's page size) under load — a keyed provider is what actually makes Import fast enough to finish within the deadline. **dRPC is not configured anywhere in this app** — it's called out in code comments (`packages/ledger/src/chain/client.ts`) purely as a provider to avoid if you're picking your own: its free tier caps `eth_getLogs` at roughly 100 blocks in practice, well under what it advertises. |
+| 4 | **Alchemy** — one app with Arc **mainnet and testnet** enabled | Keyed endpoints for `ARC_RPC_PRIMARY`/`ARC_TESTNET_RPC_PRIMARY`: fast, unthrottled `eth_call`/receipts/balances and no Cloudflare user-agent games. **What it does not give you: log history.** Measured 2026-09-22: Alchemy's *free* tier rejects any `eth_getLogs` span over **10 blocks** on Arc (`-32600`, "Upgrade to PAYG"). The app's transport chain handles that — a wide log query that Alchemy refuses is retried on the fallback in the same call — so Import history still comes from the fallback, QuickNode's public Arc mirror (`rpc.quicknode.*.arc.io`), which serves **10,000-block** spans but rate-limits under load. That is the practical ceiling for Import today on every provider we could find (dRPC: ~100 blocks; Blockdaemon prunes after ~3–4 days; the un-keyed `rpc.mainnet.arc.io` hangs on wide spans). A paid archive plan with a larger `eth_getLogs` cap would make Import faster; raise `PARAMS.logPageBlocks.max` when one exists. |
 | 5 | **Reown / WalletConnect Cloud** ([reown.com](https://reown.com), free) | A project id for `WALLETCONNECT_PROJECT_ID`, required by RainbowKit for WalletConnect/mobile wallet support. |
 | 6 | **Vercel** | Hosting, the `/api/cron/imports` cron job, and env var storage. |
 
@@ -35,11 +35,18 @@ settings for deployment.
 | `RPC_USER_AGENT` | — | `memoline/0.1 (+https://memoline.io)` | Runtime (default works; Arc's public RPCs 403 the default Node/Python user agent) |
 | `ALLOW_7702_SENDERS` | — | `true` | Runtime (default `true`; Spike 0 verified 7702-delegated EOAs work with Memo) |
 | `CRON_SECRET` | Generate: `openssl rand -hex 32` | `a1b2...` | Runtime — required for `/api/cron/imports` to do anything; without it the endpoint returns `503` rather than running unauthenticated (see step 5) |
-| `NEXT_PUBLIC_APP_URL` | Your domain | `https://memoline.io` | Runtime, **production only** — without it, SIWE sign-in falls back to trusting the request's `Host` header, which is only safe if the platform strictly rejects a forged `Host` |
+| `NEXT_PUBLIC_APP_URL` | Your canonical domain | `https://memoline.io` | Runtime, **Production only** — do **not** set it for Preview. Sign-in accepts the request `Host` when it is this host *or* one of the hosts Vercel injects for the deployment (`VERCEL_PROJECT_PRODUCTION_URL`, `VERCEL_URL`, `VERCEL_BRANCH_URL`), so `*.vercel.app` and preview URLs work; any other host is rejected. Requires "Automatically expose System Environment Variables" (on by default) |
 
 ## 3. Database migration
 
-Run once against the Neon database, and again after any migration is added later:
+**One database per `CHAIN_ENV`.** Never point a testnet deployment and a mainnet deployment at the
+same database: the ledger and imports carry a chain id, but a shared database makes the cron and the
+stats page see both chains' rows, and a testnet→mainnet switch would silently mix them. The live setup
+is one Neon project with two branches — `production` (mainnet, Vercel Production) and `testnet`
+(Vercel Preview) — each with its own pooled `DATABASE_URL`. Use `sslmode=verify-full` in the URL (the
+`pg` driver warns that `require` will stop verifying certificates in a future major).
+
+Run once against each branch, and again after any migration is added later:
 
 ```bash
 DATABASE_URL="<neon pooled url>" pnpm --filter @memoline/web db:migrate
@@ -64,18 +71,32 @@ Rollback below.
    ships TypeScript source with relative imports written as `./foo.js` that resolve to the sibling `.ts`
    file; Turbopack cannot follow that mapping ([next.js#82945](https://github.com/vercel/next.js/issues/82945)) — plain `next build` (Turbopack, the Next 16 default) fails on it. `apps/web/next.config.ts` documents this.
 4. **Install Command**: default (`pnpm install`) is fine.
-5. Add every environment variable from the table above under **Settings → Environment Variables**
-   (Production, and Preview if you want preview deployments to work).
+5. Add every environment variable from the table above under **Settings → Environment Variables**:
+   Production = mainnet (`CHAIN_ENV=mainnet`, the `production` Neon branch, `NEXT_PUBLIC_APP_URL`),
+   Preview = testnet (`CHAIN_ENV=testnet`, the `testnet` Neon branch, no `NEXT_PUBLIC_APP_URL`). A
+   preview deployment of `main` (`vercel deploy` without `--prod`) is therefore the live testnet app.
 6. Deploy.
 
 ## 5. Cron
 
-`apps/web/vercel.json` schedules `/api/cron/imports` at `*/5 * * * *` (every 5 minutes) — this is what
-continues a signed-in workspace's stored Import in bounded steps after the first inline step.
-**`*/5` cron frequency requires a Vercel Pro plan.** On the free Hobby plan, Vercel silently limits cron
-jobs to once a day, which means a multi-step Import (anything past ~200,000 blocks) may take a very long
-time to finish. If you're on Hobby, either upgrade to Pro or expect slow Import completion for
-addresses with a lot of history — the first inline step still runs correctly either way.
+`apps/web/vercel.json` schedules `/api/cron/imports` **once a day** (`0 3 * * *`, 03:00 UTC). This is
+what continues a signed-in workspace's stored Import in bounded, deadline-aware steps after the first
+inline step (each tick commits whatever pages finished inside its time slice and advances the cursor
+exactly that far — a slow RPC means smaller steps, never a killed function that recorded nothing).
+
+**Why daily:** on the Vercel **Hobby** plan a sub-daily cron expression does not get throttled — the
+deployment itself **fails** with "Hobby accounts are limited to daily cron jobs" (Vercel docs, *Cron
+Jobs › Usage & Pricing*). On Pro, change the schedule to `*/5 * * * *` and stored imports of long
+histories finish in minutes instead of days. Until then a stored import past the first inline step
+advances one tick per day; the anonymous reconciliation on the landing page is unaffected.
+
+The same file pins functions to `iad1`, the Vercel region adjacent to the Neon project's
+`aws-us-east-1`. Keep the two together: the money path holds a row lock across several small
+statements, and cross-region latency is what would push it toward the function timeout.
+
+The cron request carries `Authorization: Bearer <CRON_SECRET>` (Vercel injects it from the env var of
+the same name); the handler compares in constant time and returns 503 when the secret is unset, 401
+when it is wrong. It only continues imports whose `chain_id` matches this deployment's `CHAIN_ENV`.
 
 ## 6. Pre-mainnet: verify the chunk-lease suite against real Postgres
 

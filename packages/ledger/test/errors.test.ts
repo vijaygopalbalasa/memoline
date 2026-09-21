@@ -94,6 +94,15 @@ describe('mapRpcError', () => {
       mapRpcError({ code: 35, details: 'ranges over 10000 blocks are not supported on free plan' }).code,
     ).toBe('RPC_RANGE_TOO_LARGE');
   });
+  it("maps Alchemy's free-tier -32600 'up to a 10 block range' rejection to RPC_RANGE_TOO_LARGE (observed on arc-mainnet 2026-09-22)", () => {
+    expect(
+      mapRpcError({
+        code: -32600,
+        message:
+          'Under the Free tier plan, you can make eth_getLogs requests with up to a 10 block range. Based on your parameters, this block range should work: [0x1, 0xa]. Upgrade to PAYG for expanded block range.',
+      }).code,
+    ).toBe('RPC_RANGE_TOO_LARGE');
+  });
   it('requires text corroboration for code 35 (an unrelated code-35 error is not mislabelled a range error)', () => {
     const code = mapRpcError({ code: 35, message: 'execution reverted' }).code;
     expect(code).not.toBe('RPC_RANGE_TOO_LARGE');

@@ -220,11 +220,14 @@ export function mapRpcError(e: unknown, ctx: { chunkRows?: number } = {}): Ledge
   // same way -32602 is, rather than trusted bare (an unrelated code-35 error would otherwise be
   // mislabelled RPC_RANGE_TOO_LARGE and hide its real cause). The text-only alternatives are
   // deliberately narrow — no bare "block range" — so a generic "invalid block range" (a nonexistent
-  // block, not an over-large range) doesn't false-positive here.
+  // block, not an over-large range) doesn't false-positive here. "up to a N block range" is Alchemy's
+  // free-tier cap (-32600, 10 blocks on Arc — observed 2026-09-22); with a fallback transport
+  // configured the request already went to the next provider, but classifying it means a
+  // single-provider client halves the page instead of burning its in-place retries on it.
   if (
     (code === -32602 && /range/i.test(text)) ||
     (code === 35 && /range|block/i.test(text)) ||
-    /ranges? over \d+ blocks|range too (large|wide)|exceeds (the )?max(imum)? (allowed )?range|query returned more than \d+ results/i.test(
+    /ranges? over \d+ blocks|range too (large|wide)|exceeds (the )?max(imum)? (allowed )?range|query returned more than \d+ results|up to an? \d+ block range/i.test(
       text,
     )
   ) {

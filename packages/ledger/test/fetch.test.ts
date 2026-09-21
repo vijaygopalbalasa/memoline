@@ -1,6 +1,6 @@
 import type { Log } from 'viem';
 import { describe, expect, it } from 'vitest';
-import { ADDRESSES, type FetchClient, fetchAddressLogs } from '../src/index.js';
+import { ADDRESSES, type FetchClient, fetchAddressLogs, getLogsPaged } from '../src/index.js';
 
 type Call = { from: bigint; to: bigint; address: string; eventName: string | undefined; args: unknown };
 
@@ -367,5 +367,78 @@ describe('fetchAddressLogs deadlineAt', () => {
     // Bounded by ~one in-flight request, not by paging through the 1,000,000-block window (which would
     // need many multi-second RPC round trips against a real provider).
     expect(elapsed).toBeLessThan(200);
+  });
+});
+
+describe('pager remembers a rejected page size', () => {
+  it('never re-grows into a size the provider already rejected: one rejection total, then every page fits', async () => {
+    // A provider with a 6,000-block cap. Start (10,000) is rejected once; after halving to 5,000 the
+    // pager must not double back to 10,000 on the next page — the old behaviour cost one rejected
+    // (and, on a rate-limited endpoint, expensive) call per page for the whole scan.
+    const { client, calls } = mockClient({ maxRange: 6_000n });
+    const result = await fetchAddressLogs(client, {
+      chainId: CHAIN,
+      address: TARGET,
+      fromBlock: 1n,
+      toBlock: 60_000n,
+      sleepMs: 0,
+    });
+    expect(result.complete).toBe(true);
+    const rejected = calls.filter((c) => c.to - c.from + 1n > 6_000n);
+    expect(rejected).toHaveLength(1);
+    // 60,000 blocks at 5,000 per page = 12 pages × 5 queries, plus the single rejected probe.
+    expect(calls).toHaveLength(12 * 5 + 1);
+  });
+});
+
+describe('getLogsPaged', () => {
+  it('walks one arbitrary filter over a span wider than the provider cap, halving and covering every block exactly once', async () => {
+    const { client, calls } = mockClient({ maxRange: 10_000n });
+    const result = await getLogsPaged(
+      client,
+      { address: MEMO as `0x${string}` },
+      { fromBlock: 100n, toBlock: 25_099n, sleepMs: 0 },
+    );
+    expect(result.complete).toBe(true);
+    expect(result.scannedToBlock).toBe(25_099n);
+    const ranges = calls
+      .filter((c) => c.to - c.from + 1n <= 10_000n)
+      .map((c) => ({ from: c.from, to: c.to }));
+    assertContiguousCoverage(ranges, 100n, 25_099n);
+    for (const c of calls) expect(c.address).toBe(MEMO);
+  });
+
+  it('returns the logs the provider hands back, merged and sorted across pages', async () => {
+    const mk = (blockNumber: bigint, logIndex: number): Log =>
+      ({ blockNumber, logIndex, transactionHash: `0x${blockNumber.toString(16).padStart(64, '0')}` }) as Log;
+    const client = {
+      getLogs: async (p: { fromBlock: bigint; toBlock: bigint }) => {
+        if (p.toBlock - p.fromBlock + 1n > 10_000n) throw { code: -32602, message: 'range too large' };
+        // one log per page, at the page's first block
+        return [mk(p.fromBlock, 0)];
+      },
+    } as unknown as FetchClient;
+    const result = await getLogsPaged(
+      client,
+      { address: MEMO as `0x${string}` },
+      {
+        fromBlock: 1n,
+        toBlock: 30_000n,
+        direction: 'backward',
+        sleepMs: 0,
+      },
+    );
+    expect(result.logs.map((l) => l.blockNumber)).toEqual([1n, 10_001n, 20_001n]);
+  });
+
+  it('gives up with the mapped code when the provider rejects even the floor page size', async () => {
+    const { client } = mockClient({ maxRange: 100n });
+    await expect(
+      getLogsPaged(
+        client,
+        { address: MEMO as `0x${string}` },
+        { fromBlock: 1n, toBlock: 5_000n, sleepMs: 0 },
+      ),
+    ).rejects.toThrow(/RPC_RANGE_TOO_LARGE/);
   });
 });
