@@ -1,5 +1,7 @@
 # Memoline
 
+**Live:** mainnet https://memoline-one.vercel.app · testnet https://memoline-testnet.vercel.app
+
 Memoline is a non-custodial back office for stablecoin payouts on [Arc](https://docs.arc.io). You paste a
 CSV of recipients, your own wallet signs each batch, and every payment carries an on-chain memo that
 Memoline turns back into a reconciled ledger line. There is no custody, no server-held keys, and no fiat —
