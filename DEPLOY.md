@@ -84,24 +84,30 @@ addresses with a lot of history — the first inline step still runs correctly e
 operator (two tabs, a retry, a force take-over) and paying the same rows twice: Memo has no on-chain
 replay guard, so every guard is a `SELECT … FOR UPDATE` on the run row plus a conditional UPDATE.
 
-The test suite runs on **pglite**, which is a single in-process connection. It executes the SQL, so the
-statements are exercised — but it can never produce *contention*: no second connection can block on the
-row lock, so a passing pglite run is not evidence that the locking works. Verify against a real
-Postgres with at least 2 connections before any mainnet release:
+The default test backend is **PGlite**, a single in-process connection. It executes the SQL, so the
+statements are exercised — but it can never produce *contention*: no second connection can block on
+the row lock, so a passing PGlite run is not evidence that the locking works. Proven 2026-09-22: a
+deliberately broken lease (check-then-set, no run lock) still passes the race test on PGlite and
+fails it on Postgres 17 with `['send', 'send']` — a double payment PGlite cannot see.
+
+The suite therefore has a second backend. Set `TEST_DATABASE_URL` to an admin-capable URL on any
+**disposable** Postgres (local, Docker, or a Neon branch — never production) and every test database
+becomes a clone of a migrated template, served through the production driver (`pg` Pool, 5
+connections):
 
 ```bash
-# any real Postgres (local, Docker, or a Neon branch) — never the production database
-createdb memoline_lease_check
-DATABASE_URL="postgres://localhost/memoline_lease_check" pnpm --filter @memoline/web db:migrate
-# point the chunk-lease tests at it (they currently build their own pglite in `makeTestDb`), then:
-pnpm --filter @memoline/web test -- runs.test.ts
+# creates memoline_tpl_* / memoline_tpl_*_<pid>_<n> databases for the run and drops them after
+TEST_DATABASE_URL="postgres://localhost:5432/postgres" pnpm --filter @memoline/web test
 ```
+
+CI runs this pass on every push against a `postgres:17` service (`.github/workflows/ci.yml`), so a
+green `main` already includes it. Run it by hand before a mainnet release anyway; last local run
+2026-09-22: 117/117 on PostgreSQL 17.10.
 
 The cases that matter are the concurrent ones in `apps/web/test/runs.test.ts`: two `prepareChunk` calls
 racing for one chunk (exactly one may get `kind: 'send'`), `preflightRun`'s rebuild racing a lease
 (the rebuild must abort, never re-chunk leased rows), and `settleChunk`'s DROPPED→READY transition
-racing a lease. Run them with concurrent connections; any two simultaneous `send` results for one chunk
-is a release blocker.
+racing a lease. Any two simultaneous `send` results for one chunk is a release blocker.
 
 ## 7. Mainnet smoke test
 

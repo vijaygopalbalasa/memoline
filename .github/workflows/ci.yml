@@ -5,6 +5,15 @@ on:
 jobs:
   check:
     runs-on: ubuntu-latest
+    services:
+      # A disposable Postgres for the second test pass below. Same major version as production
+      # (Neon runs 17); never a persistent database.
+      postgres:
+        image: postgres:17
+        env: { POSTGRES_USER: memoline, POSTGRES_PASSWORD: memoline, POSTGRES_DB: postgres }
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd pg_isready --health-interval 5s --health-timeout 5s --health-retries 10
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
@@ -15,3 +24,9 @@ jobs:
       - run: pnpm lint
       - run: pnpm typecheck
       - run: pnpm test
+      # The chunk-lease guards in apps/web/src/services/runs.ts only prove anything under real
+      # connection contention, which the in-process PGlite used by `pnpm test` cannot produce
+      # (DEPLOY.md §6). This pass runs the web suite on a multi-connection Postgres instead.
+      - name: web suite on real Postgres (lease contention)
+        run: pnpm --filter @memoline/web test
+        env: { TEST_DATABASE_URL: postgres://memoline:memoline@localhost:5432/postgres }
