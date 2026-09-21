@@ -4,6 +4,8 @@ import {
   AmountError,
   format6,
   formatNative18,
+  formatNative18Ceil6,
+  formatNative18Exact,
   fromNative18,
   parseAmount6,
   toNative18,
@@ -93,6 +95,19 @@ describe('formatting', () => {
     fc.assert(fc.property(fc.bigInt({ min: 1n, max: 2n ** 80n }), (a) => parseAmount6(format6(a)) === a));
   });
 
+  it('formatNative18Exact is a plain decimal that keeps every native unit (spreadsheet-summable)', () => {
+    expect(formatNative18Exact(7_020_910_000_000_000n)).toBe('0.00702091');
+    expect(formatNative18Exact(1_000_000_000_001n)).toBe('0.000001000000000001');
+    expect(formatNative18Exact(7n)).toBe('0.000000000000000007');
+    expect(formatNative18Exact(0n)).toBe('0.00');
+    expect(formatNative18Exact(5n * 10n ** 18n)).toBe('5.00');
+    expect(formatNative18Exact(-1_500_000_000_000_000_000n)).toBe('-1.50');
+  });
+  it('formatNative18Ceil6 rounds an estimate up to 6 dp, never down', () => {
+    expect(formatNative18Ceil6(43_541_032_500_000_000n)).toBe('0.043542');
+    expect(formatNative18Ceil6(43_541_000_000_000_000n)).toBe('0.043541');
+    expect(formatNative18Ceil6(0n)).toBe('0.00');
+  });
   it('formatNative18 shows 6 dp and flags dust', () => {
     expect(formatNative18(420_000_000_000_000n)).toBe('0.00042');
     expect(formatNative18(1_000_000_000_001n)).toBe('0.000001 (+1 dust)');

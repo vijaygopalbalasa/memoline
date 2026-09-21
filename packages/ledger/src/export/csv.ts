@@ -1,7 +1,7 @@
 import type { Address, Hex } from 'viem';
 import type { ChainId, Token } from '../chain/addresses.js';
 import { explorerTxUrl } from '../chain/chains.js';
-import { format6, formatNative18, toNative18 } from '../money/amount.js';
+import { format6, formatNative18Exact, toNative18 } from '../money/amount.js';
 import type { LedgerEntry } from '../reconcile/types.js';
 
 export type RunReportRow = {
@@ -32,9 +32,9 @@ export type RunReport = {
 };
 
 export const RUN_CSV_HEADER =
-  'run_id,row,reference,recipient,token,amount,amount_base6,amount_native18,status,tx_hash,log_index,memo_id,memo_index,block_number,block_time_utc,fee_usdc_row,fee_usdc_chunk,exception_reason,explorer_url';
+  'run_id,row,reference,recipient,token,amount,amount_base6,amount_native18,status,tx_hash,log_index,memo_id,memo_index,block_number,block_time_utc,fee_usdc_row,fee_native18_row,fee_usdc_chunk,fee_native18_chunk,exception_reason,explorer_url';
 export const ENTRIES_CSV_HEADER =
-  'direction,token,amount,amount_base6,amount_native18,counterparty,tx_hash,log_index,memo_id,memo_index,source_type,source_id,block_number,block_time_utc,fee_usdc,note,explorer_url';
+  'direction,token,amount,amount_base6,amount_native18,counterparty,tx_hash,log_index,memo_id,memo_index,source_type,source_id,block_number,block_time_utc,fee_usdc,fee_native18,note,explorer_url';
 
 type CsvCell = string | number | bigint | null | undefined;
 
@@ -85,7 +85,7 @@ export function runFooter(r: RunReport) {
     rows_pending: r.rows.filter((x) => x.status === 'PENDING' || x.status === 'SENT').length,
     total_paid: format6(totalPaid),
     total_paid_base6: totalPaid,
-    total_fees_usdc: formatNative18(totalFees),
+    total_fees_usdc: formatNative18Exact(totalFees),
     total_fees_native18: totalFees,
     sender: r.sender,
     token: r.token,
@@ -115,8 +115,10 @@ export function runToCsv(r: RunReport): string {
         x.memoIndex ?? '',
         x.blockNumber ?? '',
         iso(x.blockTime),
-        x.feeRowNative18 === undefined ? '' : formatNative18(x.feeRowNative18),
-        x.feeChunkNative18 === undefined ? '' : formatNative18(x.feeChunkNative18),
+        x.feeRowNative18 === undefined ? '' : formatNative18Exact(x.feeRowNative18),
+        x.feeRowNative18 === undefined ? '' : x.feeRowNative18,
+        x.feeChunkNative18 === undefined ? '' : formatNative18Exact(x.feeChunkNative18),
+        x.feeChunkNative18 === undefined ? '' : x.feeChunkNative18,
         csvText(x.exceptionReason),
         x.explorerUrl ?? (x.txHash ? explorerTxUrl(r.chainId, x.txHash) : ''),
       ]),
@@ -149,7 +151,8 @@ export function entriesToCsv(
         e.sourceId ?? '',
         e.blockNumber,
         iso(e.blockTime),
-        formatNative18(e.feeNative18),
+        formatNative18Exact(e.feeNative18),
+        e.feeNative18,
         csvText(e.note),
         explorerTxUrl(meta.chainId, e.txHash),
       ]),
@@ -162,7 +165,8 @@ export function entriesToCsv(
   lines.push(toCsvLine(['entries', entries.length]));
   lines.push(toCsvLine(['total_out', format6(out)]));
   lines.push(toCsvLine(['total_in', format6(inn)]));
-  lines.push(toCsvLine(['total_fees_usdc', formatNative18(fees)]));
+  lines.push(toCsvLine(['total_fees_usdc', formatNative18Exact(fees)]));
+  lines.push(toCsvLine(['total_fees_native18', fees]));
   lines.push(toCsvLine(['chain_id', meta.chainId]));
   lines.push(toCsvLine(['generated_at', meta.generatedAt]));
   return lines.join('\n');

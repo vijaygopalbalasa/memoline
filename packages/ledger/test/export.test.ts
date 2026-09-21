@@ -60,8 +60,8 @@ const report: RunReport = {
   ],
 };
 
-// Canonical display (format6) trims trailing zeros to a minimum of 2 dp, so the
-// dust-only fee total renders as "0.00 (+7 dust)", not "0.000000 (+7 dust)".
+// Fee cells are exact decimals (formatNative18Exact): a 7-unit dust-only fee total is the plain
+// number 0.000000000000000007, which a spreadsheet can sum — never an annotated "(+7 dust)" string.
 const BLOCK_TIME_PREFIX = new Date(1_789_000_000 * 1000).toISOString().slice(0, 11);
 
 describe('runToCsv', () => {
@@ -69,7 +69,7 @@ describe('runToCsv', () => {
     const csv = runToCsv(report);
     const lines = csv.split('\n');
     expect(lines[0]).toBe(
-      'run_id,row,reference,recipient,token,amount,amount_base6,amount_native18,status,tx_hash,log_index,memo_id,memo_index,block_number,block_time_utc,fee_usdc_row,fee_usdc_chunk,exception_reason,explorer_url',
+      'run_id,row,reference,recipient,token,amount,amount_base6,amount_native18,status,tx_hash,log_index,memo_id,memo_index,block_number,block_time_utc,fee_usdc_row,fee_native18_row,fee_usdc_chunk,fee_native18_chunk,exception_reason,explorer_url',
     );
     expect(lines[1]).toContain(
       `RUN1,0,INV-1,0x3C44CdDdB6a900fa2b585dd299e03d12FA4293BC,USDC,125.50,125500000,125500000000000000000,RECONCILED,0xaa,3,0x01,7,100,${BLOCK_TIME_PREFIX}`,
@@ -79,7 +79,8 @@ describe('runToCsv', () => {
     expect(csv).toContain('rows_excluded,1');
     expect(csv).toContain('rows_exception,0');
     expect(csv).toContain('total_paid,125.500001');
-    expect(csv).toContain('total_fees_usdc,0.00 (+7 dust)');
+    expect(csv).toContain('total_fees_usdc,0.000000000000000007');
+    expect(csv).toContain('total_fees_native18,7');
     expect(csv).toContain('csv_sha256,abc');
     expect(csv).toContain('chain_id,5042002');
   });
@@ -169,7 +170,7 @@ describe('runToJson / entriesToCsv', () => {
     };
     const csv = entriesToCsv([e], { chainId: 5042002, generatedAt: 'now' });
     expect(csv.split('\n')[0]).toBe(
-      'direction,token,amount,amount_base6,amount_native18,counterparty,tx_hash,log_index,memo_id,memo_index,source_type,source_id,block_number,block_time_utc,fee_usdc,note,explorer_url',
+      'direction,token,amount,amount_base6,amount_native18,counterparty,tx_hash,log_index,memo_id,memo_index,source_type,source_id,block_number,block_time_utc,fee_usdc,fee_native18,note,explorer_url',
     );
     expect(csv.split('\n')[1]).toContain('in,USDC,0.000005,5,5000000000000,0x3C44');
   });

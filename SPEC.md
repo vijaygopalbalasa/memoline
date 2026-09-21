@@ -288,8 +288,13 @@ CSV and JSON, per run and for any ledger date range:
 ```
 run_id,row,reference,recipient,token,amount,amount_base6,amount_native18,status,
 tx_hash,log_index,memo_id,memo_index,block_number,block_time_utc,
-fee_usdc_row,fee_usdc_chunk,exception_reason,explorer_url
+fee_usdc_row,fee_native18_row,fee_usdc_chunk,fee_native18_chunk,exception_reason,explorer_url
 ```
+
+Every numeric column is a plain number a spreadsheet can sum — fee columns are the exact 18-dp
+decimal plus the integer native units (`fee_native18_*`), never an annotated string. (Amended
+2026-09-22 after the first live run: the original `0.00702 (+910000000000 dust)` form could not be
+summed in a spreadsheet, which is the whole point of the export.)
 
 Footer block: rows paid, rows excluded, rows in exception, total paid, total fees, sender, token, chain ID, CSV hash, generated-at. The file must tie out to the cent with no manual edits.
 

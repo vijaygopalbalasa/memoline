@@ -60,8 +60,35 @@ export function format6(amount6: bigint): string {
   return `${neg ? '-' : ''}${whole}.${frac}`;
 }
 
+/** Diagnostic display of an 18-dp native value: 6-dp part plus an explicit dust remainder. Meant for
+ * logs and ops views where seeing the split matters; user-facing surfaces and exports use
+ * `formatNative18Exact` (a plain number) instead. */
 export function formatNative18(native18: bigint): string {
   const { amount6, dust } = fromNative18(native18);
   const base = format6(amount6);
   return dust === 0n ? base : `${base} (+${dust} dust)`;
+}
+
+const SCALE_18 = 10n ** 18n;
+
+/**
+ * An 18-dp native value as one exact decimal number — every unit kept, nothing annotated. At least
+ * 2 dp, trailing zeros trimmed. This is what goes in a CSV fee column: a spreadsheet can sum
+ * `0.00702091` but not `0.00702 (+910000000000 dust)`, and the old annotated form was exactly what
+ * broke "export ties out in a real spreadsheet" on the first live run.
+ */
+export function formatNative18Exact(native18: bigint): string {
+  const neg = native18 < 0n;
+  const abs = neg ? -native18 : native18;
+  const whole = abs / SCALE_18;
+  let frac = (abs % SCALE_18).toString().padStart(18, '0').replace(/0+$/, '');
+  if (frac.length < 2) frac = frac.padEnd(2, '0');
+  return `${neg ? '-' : ''}${whole}.${frac}`;
+}
+
+/** An 18-dp native value rounded *up* to 6 dp, for showing an estimate to a person ("≈ 0.043542
+ * USDC"): rounding up means the number shown is never below what will actually be paid. */
+export function formatNative18Ceil6(native18: bigint): string {
+  const { amount6, dust } = fromNative18(native18);
+  return format6(dust > 0n ? amount6 + 1n : amount6);
 }
