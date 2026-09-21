@@ -34,7 +34,7 @@ export type RunReport = {
 export const RUN_CSV_HEADER =
   'run_id,row,reference,recipient,token,amount,amount_base6,amount_native18,status,tx_hash,log_index,memo_id,memo_index,block_number,block_time_utc,fee_usdc_row,fee_native18_row,fee_usdc_chunk,fee_native18_chunk,exception_reason,explorer_url';
 export const ENTRIES_CSV_HEADER =
-  'direction,token,amount,amount_base6,amount_native18,counterparty,tx_hash,log_index,memo_id,memo_index,source_type,source_id,block_number,block_time_utc,fee_usdc,fee_native18,note,explorer_url';
+  'direction,token,amount,amount_base6,amount_native18,counterparty,reference,tx_hash,log_index,memo_id,memo_index,source_type,source_id,block_number,block_time_utc,fee_usdc,fee_native18,note,explorer_url';
 
 type CsvCell = string | number | bigint | null | undefined;
 
@@ -143,6 +143,7 @@ export function entriesToCsv(
         e.amount6,
         e.amountNative18 ?? '',
         e.counterparty,
+        csvText(e.reference),
         e.txHash,
         e.logIndex,
         e.memoId ?? '',

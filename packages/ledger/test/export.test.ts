@@ -161,6 +161,7 @@ describe('runToJson / entriesToCsv', () => {
       logIndex: 1,
       memoId: null,
       memoIndex: null,
+      reference: null,
       sourceType: 'import',
       sourceId: 'IMP',
       blockNumber: 5n,
@@ -170,9 +171,10 @@ describe('runToJson / entriesToCsv', () => {
     };
     const csv = entriesToCsv([e], { chainId: 5042002, generatedAt: 'now' });
     expect(csv.split('\n')[0]).toBe(
-      'direction,token,amount,amount_base6,amount_native18,counterparty,tx_hash,log_index,memo_id,memo_index,source_type,source_id,block_number,block_time_utc,fee_usdc,fee_native18,note,explorer_url',
+      'direction,token,amount,amount_base6,amount_native18,counterparty,reference,tx_hash,log_index,memo_id,memo_index,source_type,source_id,block_number,block_time_utc,fee_usdc,fee_native18,note,explorer_url',
     );
     expect(csv.split('\n')[1]).toContain('in,USDC,0.000005,5,5000000000000,0x3C44');
+    expect(csv.split('\n')[1]).toContain(',,0xbb,'); // empty reference cell between counterparty and tx
   });
   it('escapes a comma/quote in the entries footer instead of writing a raw template string', () => {
     const e: LedgerEntry = {
@@ -185,6 +187,7 @@ describe('runToJson / entriesToCsv', () => {
       logIndex: 1,
       memoId: null,
       memoIndex: null,
+      reference: null,
       sourceType: 'import',
       sourceId: 'IMP',
       blockNumber: 5n,

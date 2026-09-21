@@ -12,6 +12,10 @@ export type LedgerEntry = {
   logIndex: number;
   memoId: Hex | null;
   memoIndex: bigint | null;
+  /** The human reference carried in the memo (an invoice id, a payout row's reference) — decoded
+   * from on-chain memo data on import, copied from the row on the payout side. Null when the memo
+   * is absent or not Memoline-formatted. This is the "line in your books" the product promises. */
+  reference: string | null;
   sourceType: 'payout' | 'import';
   sourceId: string | null;
   blockNumber: bigint;

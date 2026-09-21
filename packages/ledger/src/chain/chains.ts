@@ -21,3 +21,7 @@ export function chainById(chainId: ChainId): Chain {
 export function explorerTxUrl(chainId: ChainId, txHash: string): string {
   return `${chainById(chainId).blockExplorers?.default.url}/tx/${txHash}`;
 }
+
+export function explorerAddressUrl(chainId: ChainId, address: string): string {
+  return `${chainById(chainId).blockExplorers?.default.url}/address/${address}`;
+}

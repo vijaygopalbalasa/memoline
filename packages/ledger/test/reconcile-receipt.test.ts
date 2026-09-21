@@ -66,6 +66,11 @@ describe('allocateFee', () => {
 describe('reconcileReceipt (USDC 3-row fixture)', () => {
   const f = load('receipt-usdc-3rows.json');
 
+  it('every reconciled entry carries the row reference — the memo line becomes the ledger line', () => {
+    const f = load('receipt-usdc-3rows.json');
+    const r = reconcileReceipt(f.receipt, ctxOf(f));
+    expect(r.entries.map((e) => e.reference)).toEqual(f.rows.map((row) => row.reference));
+  });
   it('fixture contains BOTH emitters (the trap is real)', () => {
     const sys = f.receipt.logs.filter(
       (l) =>

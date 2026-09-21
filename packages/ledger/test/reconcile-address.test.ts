@@ -38,15 +38,57 @@ const base = {
 };
 
 describe('reconcileAddress', () => {
-  it('sender view: 3 outgoing entries with memos, fee on the first entry only, USDC-contract logs ignored', () => {
+  it('sender view: 3 outgoing entries with memos and decoded references, gas split pro rata (remainder to the first), USDC-contract logs ignored', () => {
     const entries = reconcileAddress({ ...base, address: f.sender, logs: f.receipt.logs as Log[] });
     expect(entries).toHaveLength(3);
     expect(
       entries.every((e) => e.direction === 'out' && e.sourceType === 'import' && e.memoId !== null),
     ).toBe(true);
-    expect(entries[0]?.feeNative18).toBe(f.receipt.gasUsed * f.receipt.effectiveGasPrice);
-    expect(entries[1]?.feeNative18).toBe(0n);
+    // The invoice reference travels on-chain in the memo data and comes back as a ledger field —
+    // the same split the run-side reconciliation uses, so the payer's and the importer's view of
+    // one transaction agree line by line.
+    expect(entries.map((e) => e.reference)).toEqual(f.rows.map((r) => r.reference));
+    const fee = f.receipt.gasUsed * f.receipt.effectiveGasPrice;
+    const base3 = fee / 3n;
+    expect(entries.map((e) => e.feeNative18)).toEqual([base3 + (fee - base3 * 3n), base3, base3]);
+    expect(entries.reduce((s, e) => s + e.feeNative18, 0n)).toBe(fee);
     expect(entries.map((e) => e.amount6)).toEqual(f.rows.map((r) => BigInt(r.amount6)));
+  });
+
+  it('a transaction the address paid for with no USDC/EURC movement of its own still puts its gas in the books as a gas-only line', () => {
+    // Keep only the Memo logs: the address paid for the transaction (receipt.from) but none of the
+    // transfers touch it, so without a gas-only line the fee would silently vanish from the ledger.
+    const memoOnly = (f.receipt.logs as Log[]).filter(
+      (l) => l.address.toLowerCase() === ADDRESSES[5042002].memo.address.toLowerCase(),
+    );
+    const receipt = { ...f.receipt, logs: memoOnly } as TransactionReceipt;
+    const entries = reconcileAddress({
+      ...base,
+      receiptsByTx: new Map([[receipt.transactionHash, receipt]]),
+      address: f.sender,
+      logs: memoOnly,
+    });
+    expect(entries).toHaveLength(1);
+    expect(entries[0]).toMatchObject({
+      direction: 'self',
+      amount6: 0n,
+      logIndex: -1,
+      memoId: null,
+      reference: null,
+    });
+    expect(entries[0]?.feeNative18).toBe(f.receipt.gasUsed * f.receipt.effectiveGasPrice);
+    expect(entries[0]?.note).toMatch(/gas only/i);
+  });
+
+  it('a memo that is not Memoline-formatted yields a null reference, never a throw', () => {
+    const logs = (f.receipt.logs as Log[]).map((l) =>
+      l.address.toLowerCase() === ADDRESSES[5042002].memo.address.toLowerCase() && l.data.length > 200
+        ? { ...l, data: l.data.slice(0, 130).padEnd(l.data.length, '0') as `0x${string}` }
+        : l,
+    );
+    const entries = reconcileAddress({ ...base, address: f.sender, logs });
+    expect(entries).toHaveLength(3);
+    expect(entries.every((e) => e.reference === null || typeof e.reference === 'string')).toBe(true);
   });
 
   it('recipient view: one incoming entry, no fee (recipient did not pay gas)', () => {

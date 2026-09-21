@@ -1,7 +1,9 @@
 import type { Address, Hex, Log, TransactionReceipt } from 'viem';
 import { ADDRESSES, type ChainId } from '../chain/addresses.js';
 import { computeFeeNative18 } from '../chain/fees.js';
+import { decodeMemoData } from '../memo/data.js';
 import { fromNative18 } from '../money/amount.js';
+import { allocateFee } from './fees.js';
 import { bracketFor, parseReceiptLogs } from './logs.js';
 import type { LedgerEntry } from './types.js';
 
@@ -107,6 +109,7 @@ export function reconcileAddress(input: AddressReconcileInput): LedgerEntry[] {
           logIndex: t.logIndex,
           memoId: memo?.memoId ?? null,
           memoIndex: memo?.memoIndex ?? null,
+          reference: memo ? (decodeMemoData(memo.memo)?.ref ?? null) : null,
           sourceType: 'import',
           sourceId: input.importId,
           blockNumber: t.blockNumber,
@@ -118,8 +121,40 @@ export function reconcileAddress(input: AddressReconcileInput): LedgerEntry[] {
     }
 
     txEntries.sort((x, y) => x.logIndex - y.logIndex);
-    const first = txEntries[0];
-    if (paidByAddress && first) first.feeNative18 = fee;
+    if (paidByAddress) {
+      if (txEntries.length > 0) {
+        // Same split as the payout side (`reconcileReceipt`): pro rata by line, remainder on the
+        // first, so the payer's run export and an import of the same address agree line by line
+        // and both sum to the receipt's exact fee.
+        const parts = allocateFee(fee, txEntries.length);
+        txEntries.forEach((e, i) => {
+          e.feeNative18 = parts[i] ?? 0n;
+        });
+      } else if (fee > 0n) {
+        // The address paid for this transaction but moved no USDC/EURC of its own (a memo'd call
+        // that moved someone else's funds, a contract interaction). The gas is still real money out
+        // of this address; a gas-only line keeps the books tying out. logIndex -1 is the same
+        // sentinel the payout side uses for a reverted chunk's gas.
+        txEntries.push({
+          direction: 'self',
+          token: 'USDC',
+          amount6: 0n,
+          amountNative18: null,
+          counterparty: input.address,
+          txHash,
+          logIndex: -1,
+          memoId: null,
+          memoIndex: null,
+          reference: null,
+          sourceType: 'import',
+          sourceId: input.importId,
+          blockNumber: receipt?.blockNumber ?? 0n,
+          blockTime: input.blockTimes.get(receipt?.blockNumber ?? 0n) ?? 0,
+          feeNative18: fee,
+          note: 'gas only: this address paid for the transaction but no USDC or EURC moved to or from it',
+        });
+      }
+    }
     out.push(...txEntries);
   }
 

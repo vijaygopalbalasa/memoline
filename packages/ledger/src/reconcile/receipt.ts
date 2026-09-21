@@ -127,6 +127,7 @@ export function reconcileReceipt(receipt: TransactionReceipt, ctx: ReceiptContex
       logIndex: t.logIndex,
       memoId: memo.memoId,
       memoIndex: memo.memoIndex,
+      reference: row.reference,
       sourceType: 'payout',
       sourceId: `${ctx.runId}:${row.rowIndex}`,
       blockNumber: receipt.blockNumber,
