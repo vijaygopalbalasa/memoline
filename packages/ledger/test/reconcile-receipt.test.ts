@@ -1,8 +1,15 @@
-import { existsSync, readFileSync } from 'node:fs';
+import { readFileSync } from 'node:fs';
 import fc from 'fast-check';
 import type { TransactionReceipt } from 'viem';
 import { describe, expect, it } from 'vitest';
-import { ADDRESSES, allocateFee, type PayoutRow, reconcileReceipt, TOPICS } from '../src/index.js';
+import {
+  ADDRESSES,
+  allocateFee,
+  makePayoutRow,
+  type PayoutRow,
+  reconcileReceipt,
+  TOPICS,
+} from '../src/index.js';
 
 type Fixture = {
   rows: PayoutRow[];
@@ -156,15 +163,52 @@ describe('reconcileReceipt (USDC 3-row fixture)', () => {
   });
 });
 
-const EURC_FIXTURE_URL = new URL('./fixtures/receipt-eurc-2rows.json', import.meta.url);
+describe('reconcileReceipt (EURC 2-row fixture)', () => {
+  // A real Arc Testnet EURC payout (tx 0x01602101…ca062), captured by scripts/testnet/capture-receipt.ts.
+  // Loaded per test, so a missing fixture fails these tests loudly without hiding the ones above.
+  const eurc = () => load('receipt-eurc-2rows.json');
 
-describe('reconcileReceipt (EURC fixture, if present)', () => {
-  // Reports as skipped (not a vacuous green) when Task 7 hasn't produced this fixture yet.
-  it.skipIf(!existsSync(EURC_FIXTURE_URL))('uses the EURC contract log and no system-emitter value', () => {
-    const g = load('receipt-eurc-2rows.json');
+  it('uses the EURC contract log and no system-emitter value', () => {
+    const g = eurc();
+    const logsFrom = (address: string) =>
+      g.receipt.logs.filter(
+        (l) => l.address.toLowerCase() === address.toLowerCase() && l.topics[0] === TOPICS.transfer,
+      );
+    expect(logsFrom(ADDRESSES[5042002].eurc.address)).toHaveLength(2);
+    expect(logsFrom(ADDRESSES[5042002].systemEmitter.address)).toHaveLength(0);
+    expect(logsFrom(ADDRESSES[5042002].usdc.address)).toHaveLength(0);
+
     const r = reconcileReceipt(g.receipt, ctxOf(g, 'EURC'));
+    expect(r.rows.every((x) => x.status === 'RECONCILED')).toBe(true);
     expect(r.entries).toHaveLength(2);
-    expect(r.entries[0]?.amountNative18).toBeNull();
-    expect(r.entries[0]?.token).toBe('EURC');
+    expect(r.checks.unexplainedTransfers).toBe(0);
+    expect(r.checks.duplicateUsdcContractLogs).toBe(0);
+    expect(r.checks.sumOk).toBe(true);
+    for (const [i, e] of r.entries.entries()) {
+      const row = rowAt(g.rows, i);
+      expect(e.token).toBe('EURC');
+      expect(e.amountNative18).toBeNull();
+      expect(e.amount6).toBe(row.amount6);
+      expect(e.counterparty.toLowerCase()).toBe(row.recipient.toLowerCase());
+      expect(e.reference).toBe(row.reference);
+      expect(e.memoId).toBe(row.memoId);
+    }
+    const fee = g.receipt.gasUsed * g.receipt.effectiveGasPrice;
+    expect(r.chunkFeeNative18).toBe(fee);
+    expect(r.entries.reduce((a, e) => a + e.feeNative18, 0n)).toBe(fee);
+  });
+
+  it('the fixture rows are exactly what Memoline builds for that run', () => {
+    const g = eurc();
+    for (const row of g.rows) {
+      expect(makePayoutRow(g.runId, row.rowIndex, row.recipient, row.amount6, row.reference)).toEqual(row);
+    }
+  });
+
+  it('the same receipt read as USDC matches nothing (the memo target is EURC)', () => {
+    const g = eurc();
+    const r = reconcileReceipt(g.receipt, ctxOf(g, 'USDC'));
+    expect(r.entries).toHaveLength(0);
+    expect(r.rows.every((x) => x.status === 'EXCEPTION' && /not the token/.test(x.reason ?? ''))).toBe(true);
   });
 });
