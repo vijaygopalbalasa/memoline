@@ -24,3 +24,4 @@ scripts/testnet/out/
 scripts/mainnet/out/
 .deploy/
 apps/web/test/_scratch/
+private/

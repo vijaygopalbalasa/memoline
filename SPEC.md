@@ -15,7 +15,7 @@ One app, three slices, one shared ledger:
 
 ## 0. Rules for the coding agent
 
-1. Read `CONTEXT.md` first (why we are building this, decisions already made, and the priority order for trade-offs), then read this whole file before writing code. Build slice by slice. Do not start a slice until the previous slice's acceptance tests pass on Arc Testnet.
+1. Read the project context first (why we are building this, decisions already made, and the priority order for trade-offs; kept in `private/CONTEXT.md`, local only), then read this whole file before writing code. Build slice by slice. Do not start a slice until the previous slice's acceptance tests pass on Arc Testnet.
 2. **Run Spike 0 (section 5) first.** Two design decisions depend on its results.
 3. Ground truth for anything about Arc is `https://docs.arc.io/llms.txt` and the `.md` version of each docs page. If docs contradict this spec, follow the docs and record the difference in `OPEN_QUESTIONS.md`.
 4. All chain addresses live in one file, `src/chain/addresses.ts`, each with a source URL and the date checked. At startup, call `eth_getCode` on every contract address and refuse to run if any returns `0x`.
