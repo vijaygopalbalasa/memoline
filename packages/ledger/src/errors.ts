@@ -45,8 +45,8 @@ const CATALOG: Record<ErrorCode, { message: string; nextStep: string }> = {
   },
   SENDER_NOT_EOA: {
     message:
-      'The connected wallet is a smart-contract account. Arc memos can only be sent from an externally owned account (EOA).',
-    nextStep: 'Connect a standard wallet (MetaMask, Rabby, Ledger) or use the plain-transfer path.',
+      'The connected wallet is a smart-contract account, such as a multisig. Arc memo payouts must be sent from an ordinary wallet address.',
+    nextStep: 'Connect an ordinary wallet, such as a MetaMask, Rabby or Ledger account.',
   },
   SENDER_7702_UNSUPPORTED: {
     message: 'This wallet has an EIP-7702 delegation active, which has not been verified with Arc memos yet.',
