@@ -58,8 +58,9 @@ from the ledger page or by a daily cron.
   log from the USDC contract for the same movement. Reading both as payments double-counts it. Memoline
   treats the system-emitter log as the only source of truth for USDC and only *counts* (never sums) the
   contract's duplicate. EURC is an ordinary ERC-20 on Arc, so it is read from its own contract log. This
-  is checked against a recorded receipt that carries three of each and reconciles to exactly three
-  payments. The trap was first documented by [arctools](https://github.com/ilkermanap/arctools), which
+  is checked against recorded Arc receipts (a USDC batch that carries three of each and reconciles to
+  exactly three payments, and an EURC batch) and by a property test over generated receipts with the
+  duplicate logs and unrelated logs mixed in. The trap was first documented by [arctools](https://github.com/ilkermanap/arctools), which
   measured the phantom rows; Memoline builds the guard into a ledger and a payout flow.
 - **EIP-7825-aware chunking.** Arc caps a transaction at 16,777,216 gas. Memoline measured ~53k gas per
   memo'd row on testnet and chunks payout batches at 100 rows per transaction, well under the cap, and
@@ -87,7 +88,7 @@ Verified end to end:
 - **Manual wallet run on the deployed testnet app (2026-09-22):** a 3-row payout and the first
   transaction (100 rows) of a 120-row payout signed in MetaMask; the kill-the-tab, two-tabs-racing,
   reject-in-wallet and wrong-network paths exercised by hand.
-- **382 unit/integration tests** across `packages/ledger` and `apps/web` (`pnpm test`), plus the same
+- **478 unit/integration tests** across `packages/ledger` and `apps/web` (`pnpm test`), plus the same
   web suite on a real PostgreSQL 17 with connection contention (both run in `.github/workflows/ci.yml`).
 
 Not yet done: the first real payout through the mainnet app. Payment links and the ERC-8183 escrow slice
@@ -143,7 +144,7 @@ See `.env.example` for the full, current list with defaults and explanations.
 ## Tests
 
 ```bash
-pnpm test        # 382 unit/integration tests, packages/ledger + apps/web, no network access
+pnpm test        # 478 unit/integration tests, packages/ledger + apps/web, no network access
 TEST_DATABASE_URL=postgres://localhost/postgres pnpm --filter @memoline/web test   # same suite on real Postgres
 pnpm lint         # Biome
 pnpm typecheck    # strict TypeScript, every workspace
