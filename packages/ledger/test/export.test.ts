@@ -79,6 +79,14 @@ describe('runToCsv', () => {
     expect(csv).toContain('rows_excluded,1');
     expect(csv).toContain('rows_exception,0');
     expect(csv).toContain('total_paid,125.500001');
+    // Fee cells: exact decimal, then the integer native units, for both the row and its chunk.
+    const first = lines[1] ?? '';
+    const cells = first.split(',');
+    const h = (lines[0] ?? '').split(',');
+    expect(cells[h.indexOf('fee_usdc_row')]).toMatch(/^\d+\.\d+$/);
+    expect(cells[h.indexOf('fee_native18_row')]).toMatch(/^\d+$/);
+    expect(cells[h.indexOf('fee_usdc_chunk')]).toMatch(/^\d+\.\d+$/);
+    expect(cells[h.indexOf('fee_native18_chunk')]).toMatch(/^\d+$/);
     expect(csv).toContain('total_fees_usdc,0.000000000000000007');
     expect(csv).toContain('total_fees_native18,7');
     expect(csv).toContain('csv_sha256,abc');
@@ -175,6 +183,15 @@ describe('runToJson / entriesToCsv', () => {
     );
     expect(csv.split('\n')[1]).toContain('in,USDC,0.000005,5,5000000000000,0x3C44');
     expect(csv.split('\n')[1]).toContain(',,0xbb,'); // empty reference cell between counterparty and tx
+    const withRef = entriesToCsv([{ ...e, reference: 'INV-7', feeNative18: 5n }], {
+      chainId: 5042002,
+      generatedAt: 'now',
+    });
+    const cells = (withRef.split('\n')[1] ?? '').split(',');
+    const h = (withRef.split('\n')[0] ?? '').split(',');
+    expect(cells[h.indexOf('reference')]).toBe('INV-7');
+    expect(cells[h.indexOf('fee_usdc')]).toBe('0.000000000000000005');
+    expect(cells[h.indexOf('fee_native18')]).toBe('5');
   });
   it('escapes a comma/quote in the entries footer instead of writing a raw template string', () => {
     const e: LedgerEntry = {

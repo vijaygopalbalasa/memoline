@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import type { Log, TransactionReceipt } from 'viem';
 import { describe, expect, it } from 'vitest';
-import { ADDRESSES, type PayoutRow, reconcileAddress } from '../src/index.js';
+import { ADDRESSES, type PayoutRow, reconcileAddress, reconcileReceipt } from '../src/index.js';
 
 type Fixture = {
   rows: PayoutRow[];
@@ -80,15 +80,47 @@ describe('reconcileAddress', () => {
     expect(entries[0]?.note).toMatch(/gas only/i);
   });
 
-  it('a memo that is not Memoline-formatted yields a null reference, never a throw', () => {
-    const logs = (f.receipt.logs as Log[]).map((l) =>
-      l.address.toLowerCase() === ADDRESSES[5042002].memo.address.toLowerCase() && l.data.length > 200
-        ? { ...l, data: l.data.slice(0, 130).padEnd(l.data.length, '0') as `0x${string}` }
-        : l,
-    );
-    const entries = reconcileAddress({ ...base, address: f.sender, logs });
+  it('a memo whose bytes are not Memoline JSON still attaches (memoId matches) but yields a null reference, never a throw', () => {
+    // Corrupt the memo *payload* inside the Memo event's ABI data — the receipt's logs are what
+    // reconcileAddress reads once a receipt is present, so the receipt is what must be mutated.
+    // Layout: callDataHash | offset | memoIndex | length | bytes… — words 0–3 stay intact, the bytes
+    // after them become 0xff…, which is not valid JSON.
+    const corrupt = (l: Log): Log =>
+      l.address.toLowerCase() === ADDRESSES[5042002].memo.address.toLowerCase() && l.data.length > 2 + 4 * 64
+        ? {
+            ...l,
+            data: (l.data.slice(0, 2 + 4 * 64) +
+              'ff'.repeat((l.data.length - 2 - 4 * 64) / 2)) as `0x${string}`,
+          }
+        : l;
+    const logs = (f.receipt.logs as Log[]).map(corrupt);
+    const receipt = { ...f.receipt, logs } as TransactionReceipt;
+    const entries = reconcileAddress({
+      ...base,
+      receiptsByTx: new Map([[receipt.transactionHash, receipt]]),
+      address: f.sender,
+      logs,
+    });
     expect(entries).toHaveLength(3);
-    expect(entries.every((e) => e.reference === null || typeof e.reference === 'string')).toBe(true);
+    expect(entries.every((e) => e.memoId !== null)).toBe(true);
+    expect(entries.map((e) => e.reference)).toEqual([null, null, null]);
+  });
+
+  it('the payer’s run report and an import of the payer’s address agree line by line on fees and references', () => {
+    const fromImport = reconcileAddress({ ...base, address: f.sender, logs: f.receipt.logs as Log[] });
+    const fromRun = reconcileReceipt(f.receipt, {
+      chainId: 5042002,
+      sender: f.sender,
+      token: 'USDC',
+      chunk: { idx: 0, rows: f.rows.map((r) => ({ ...r, amount6: BigInt(r.amount6) })) },
+      runId: f.runId,
+      blockTime: 1_789_000_000,
+    }).entries;
+    const key = (e: { txHash: string; logIndex: number }) => `${e.txHash}:${e.logIndex}`;
+    expect(fromImport.map(key)).toEqual(fromRun.map(key));
+    expect(fromImport.map((e) => e.feeNative18)).toEqual(fromRun.map((e) => e.feeNative18));
+    expect(fromImport.map((e) => e.reference)).toEqual(fromRun.map((e) => e.reference));
+    expect(fromImport.map((e) => e.amount6)).toEqual(fromRun.map((e) => e.amount6));
   });
 
   it('recipient view: one incoming entry, no fee (recipient did not pay gas)', () => {
