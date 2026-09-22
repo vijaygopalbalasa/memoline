@@ -1,7 +1,21 @@
 import { readFileSync } from 'node:fs';
-import type { Log, TransactionReceipt } from 'viem';
+import {
+  decodeEventLog,
+  encodeAbiParameters,
+  type Hex,
+  type Log,
+  stringToHex,
+  type TransactionReceipt,
+} from 'viem';
 import { describe, expect, it } from 'vitest';
-import { ADDRESSES, type PayoutRow, reconcileAddress, reconcileReceipt } from '../src/index.js';
+import {
+  ADDRESSES,
+  encodeMemoData,
+  memoAbi,
+  type PayoutRow,
+  reconcileAddress,
+  reconcileReceipt,
+} from '../src/index.js';
 
 type Fixture = {
   rows: PayoutRow[];
@@ -80,11 +94,11 @@ describe('reconcileAddress', () => {
     expect(entries[0]?.note).toMatch(/gas only/i);
   });
 
-  it('a memo whose bytes are not Memoline JSON still attaches (memoId matches) but yields a null reference, never a throw', () => {
+  it('a memo whose bytes are binary (neither Memoline JSON nor text) still attaches (memoId matches) but yields a null reference, never a throw', () => {
     // Corrupt the memo *payload* inside the Memo event's ABI data — the receipt's logs are what
     // reconcileAddress reads once a receipt is present, so the receipt is what must be mutated.
     // Layout: callDataHash | offset | memoIndex | length | bytes… — words 0–3 stay intact, the bytes
-    // after them become 0xff…, which is not valid JSON.
+    // after them become 0xff…, which is neither valid JSON nor valid UTF-8 text.
     const corrupt = (l: Log): Log =>
       l.address.toLowerCase() === ADDRESSES[5042002].memo.address.toLowerCase() && l.data.length > 2 + 4 * 64
         ? {
@@ -104,6 +118,73 @@ describe('reconcileAddress', () => {
     expect(entries).toHaveLength(3);
     expect(entries.every((e) => e.memoId !== null)).toBe(true);
     expect(entries.map((e) => e.reference)).toEqual([null, null, null]);
+  });
+
+  /** Rewrites the memo bytes of each Memo event in the receipt, in log order, keeping every other
+   * field (sender, target, memoId, callDataHash, memoIndex) exactly as recorded on-chain. */
+  function withMemoBytes(memos: Hex[]): TransactionReceipt {
+    let i = 0;
+    const logs = (f.receipt.logs as Log[]).map((l) => {
+      if (l.address.toLowerCase() !== ADDRESSES[5042002].memo.address.toLowerCase()) return l;
+      const ev = decodeEventLog({ abi: memoAbi, data: l.data, topics: l.topics });
+      if (ev.eventName !== 'Memo') return l;
+      const memo = memos[i++];
+      if (memo === undefined) throw new Error('more Memo events than replacement memos');
+      const data = encodeAbiParameters(
+        [{ type: 'bytes32' }, { type: 'bytes' }, { type: 'uint256' }],
+        [ev.args.callDataHash, memo, ev.args.memoIndex],
+      );
+      return { ...l, data };
+    });
+    expect(i).toBe(memos.length);
+    return { ...f.receipt, logs } as TransactionReceipt;
+  }
+
+  it('a memo written by another Arc app as plain text comes back as a cleaned reference', () => {
+    // Arc's own tutorial writes memo bytes as stringToHex('order=2026-0001'). Before this, such a
+    // memo attached (memoId set) but its reference showed as empty.
+    const receipt = withMemoBytes([
+      stringToHex('order=2026-0001'),
+      stringToHex('<b>INV-9</b>\u0000\u0007'),
+      '0xffff',
+    ]);
+    const entries = reconcileAddress({
+      ...base,
+      receiptsByTx: new Map([[receipt.transactionHash, receipt]]),
+      address: f.sender,
+      logs: receipt.logs as Log[],
+    });
+    expect(entries).toHaveLength(3);
+    expect(entries.every((e) => e.memoId !== null)).toBe(true);
+    expect(entries.map((e) => e.reference)).toEqual(['order=2026-0001', 'INV-9', null]);
+  });
+
+  it('a Memoline memo still gives its own ref, and one without a ref gives null rather than its JSON', () => {
+    const receipt = withMemoBytes([
+      encodeMemoData({ v: 1, t: 'po', run: 'RUN1', row: 0, ref: 'INV-204' }),
+      encodeMemoData({ v: 1, t: 'po', run: 'RUN1', row: 1 }),
+      encodeMemoData({ v: 1, t: 'pl', link: 'L1' }),
+    ]);
+    const entries = reconcileAddress({
+      ...base,
+      receiptsByTx: new Map([[receipt.transactionHash, receipt]]),
+      address: f.sender,
+      logs: receipt.logs as Log[],
+    });
+    expect(entries.map((e) => e.reference)).toEqual(['INV-204', null, null]);
+  });
+
+  it('the single transaction view (the payer’s address, one receipt) shows another app’s memo text too', () => {
+    const receipt = withMemoBytes([stringToHex('order=2026-0001'), stringToHex('order=2026-0002'), '0x']);
+    // Same call shape the public transaction page uses: address = receipt.from, logs = receipt.logs.
+    const entries = reconcileAddress({
+      ...base,
+      receiptsByTx: new Map([[receipt.transactionHash, receipt]]),
+      address: receipt.from,
+      logs: receipt.logs as Log[],
+      importId: `tx:${receipt.transactionHash}`,
+    });
+    expect(entries.map((e) => e.reference)).toEqual(['order=2026-0001', 'order=2026-0002', null]);
   });
 
   it('the payer’s run report and an import of the payer’s address agree line by line on fees and references', () => {
