@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { makeClient } from '../src/index.js';
+import { makeClient, mapRpcError } from '../src/index.js';
 
 /** Answers every JSON-RPC call with a canned result and records which host each call went to. */
 function stubFetch(answer: (method: string) => unknown) {
@@ -79,4 +79,30 @@ describe('makeClient request routing', () => {
     await client.getLogs({ fromBlock: 1n, toBlock: 10n });
     expect(hosts.map((h) => h.host)).toEqual(['only.example', 'only.example']);
   });
+
+  it('a rate-limited history URL surfaces as a rate limit for log queries, never as the small-cap primary refusing the range', async () => {
+    const seen: { host: string; method: string }[] = [];
+    vi.stubGlobal('fetch', async (input: string | URL | Request, init?: RequestInit) => {
+      const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+      const body = JSON.parse(String(init?.body ?? '{}')) as { id: number; method: string };
+      const host = new URL(url).host;
+      seen.push({ host, method: body.method });
+      if (host === 'history.example') return new Response('Too Many Requests', { status: 429 });
+      // The keyed primary's free tier: any log range over 10 blocks is refused.
+      return new Response(
+        JSON.stringify({
+          jsonrpc: '2.0',
+          id: body.id,
+          error: { code: -32600, message: 'You can make eth_getLogs requests with up to a 10 block range.' },
+        }),
+        { headers: { 'content-type': 'application/json' } },
+      );
+    });
+    const client = makeClient(opts);
+    const err = await client.getLogs({ fromBlock: 1n, toBlock: 10_000n }).catch((e: unknown) => e);
+    expect(mapRpcError(err).code).toBe('RPC_RATE_LIMITED');
+    expect(seen.filter((x) => x.host === 'primary.example')).toHaveLength(0);
+    // Two quick retries at most, not layers of retries multiplying each other against a throttled mirror.
+    expect(seen.filter((x) => x.host === 'history.example').length).toBeLessThanOrEqual(3);
+  }, 20_000);
 });

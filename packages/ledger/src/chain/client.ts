@@ -1,4 +1,5 @@
 import { createPublicClient, custom, fallback, http, type PublicClient } from 'viem';
+import { mapRpcError } from '../errors.js';
 import type { ChainId } from './addresses.js';
 import { chainById } from './chains.js';
 
@@ -16,11 +17,17 @@ export type ClientOptions = {
 };
 
 export function makeClient(o: ClientOptions): PublicClient {
+  // One retry layer only, at the HTTP level (two quick retries, which absorb a provider's brief
+  // throttling of a burst of receipt calls). viem also retries in the fallback transport and in a
+  // custom transport, and the layers multiply: a throttled log query took 29 s and 48 requests
+  // before failing (measured 2026-09-23), hammering a mirror that was already refusing us and running
+  // past the callers' deadlines. Patient backoff for rate limits is the pager's job (fetch.ts), which
+  // knows the deadline.
   const mk = (url: string) =>
     http(url, {
       timeout: o.timeoutMs ?? 30_000,
       retryCount: 2,
-      retryDelay: 500,
+      retryDelay: 300,
       fetchOptions: { headers: { 'User-Agent': o.userAgent } },
     });
   if (!o.fallbackUrl) {
@@ -33,13 +40,26 @@ export function makeClient(o: ClientOptions): PublicClient {
   // per call before the fallback answered. Both orderings still fall through to the other URL
   // when the first refuses, so a provider outage on either side degrades rather than fails.
   const chain = chainById(o.chainId);
-  const primaryFirst = fallback([mk(o.primaryUrl), mk(o.fallbackUrl)], { rank: false })({ chain });
-  const historyFirst = fallback([mk(o.fallbackUrl), mk(o.primaryUrl)], { rank: false })({ chain });
+  const primaryFirst = fallback([mk(o.primaryUrl), mk(o.fallbackUrl)], { rank: false, retryCount: 0 })({
+    chain,
+  });
+  // A rate limit from the history URL stops the fall-through for log queries. The primary's small
+  // log-range cap would otherwise answer, its "range too large" refusal would be the error the pager
+  // sees, and the pager would shrink its pages to the floor and give up, instead of waiting and
+  // retrying the mirror, which is what a 429 calls for. Observed on mainnet 2026-09-23.
+  const historyFirst = fallback([mk(o.fallbackUrl), mk(o.primaryUrl)], {
+    rank: false,
+    retryCount: 0,
+    shouldThrow: (err) => mapRpcError(err).code === 'RPC_RATE_LIMITED',
+  })({ chain });
   return createPublicClient({
     chain,
-    transport: custom({
-      request: ({ method, params }) =>
-        (method === 'eth_getLogs' ? historyFirst : primaryFirst).request({ method, params }),
-    }),
+    transport: custom(
+      {
+        request: ({ method, params }) =>
+          (method === 'eth_getLogs' ? historyFirst : primaryFirst).request({ method, params }),
+      },
+      { retryCount: 0 },
+    ),
   });
 }
