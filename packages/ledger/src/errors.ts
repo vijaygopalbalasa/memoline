@@ -37,7 +37,7 @@ const CATALOG: Record<ErrorCode, { message: string; nextStep: string }> = {
   },
   INSUFFICIENT_BALANCE: {
     message: 'The sender wallet does not hold enough of this token for this transfer.',
-    nextStep: 'Top up the sender wallet or reduce the amounts, then re-run pre-flight.',
+    nextStep: 'Top up the sender wallet or reduce the amounts, then check the batch again.',
   },
   RECIPIENT_IS_CONTRACT: {
     message: 'The recipient is a smart contract, not a wallet.',
@@ -54,23 +54,24 @@ const CATALOG: Record<ErrorCode, { message: string; nextStep: string }> = {
   },
   GAS_CAP_EXCEEDED: {
     message: 'This batch needs more gas than Arc allows in one transaction.',
-    nextStep: 'Reduce rows per chunk; the app will split the batch.',
+    nextStep: 'The app will split the batch into smaller transactions.',
   },
   FEE_BELOW_FLOOR: {
-    message: 'The gas price is below Arc’s 20 Gwei minimum; the network would drop the transaction silently.',
+    message:
+      'The gas price is below the 20 Gwei minimum on Arc. The network would drop the transaction silently.',
     nextStep: 'Let the app set the fee (it clamps to the floor).',
   },
   TX_REVERTED: {
-    message: 'The transaction reverted on-chain; nothing was paid.',
-    nextStep: 'Re-run pre-flight to find the failing row, then retry.',
+    message: 'The transaction reverted on-chain. Nothing was paid.',
+    nextStep: 'Check the batch again to find the failing row, then retry.',
   },
   TX_DROPPED: {
     message: 'The transaction was not included and no receipt exists.',
-    nextStep: 'The app checked the memo log and nonce; it is safe to re-send this chunk.',
+    nextStep: 'The app checked the memo log and the nonce. It is safe to send this transaction again.',
   },
   RPC_RATE_LIMITED: {
     message: 'The Arc RPC is rate-limiting requests.',
-    nextStep: 'Wait a moment and retry; configure a provider RPC key for higher limits.',
+    nextStep: 'Wait a moment and retry. A provider RPC key raises the limit.',
   },
   RPC_HISTORY_UNAVAILABLE: {
     message: 'This RPC has pruned the requested block range.',
@@ -89,7 +90,7 @@ const CATALOG: Record<ErrorCode, { message: string; nextStep: string }> = {
     nextStep: 'Use the columns recipient,amount,reference with one row per payment.',
   },
   BAD_CHECKSUM: {
-    message: 'The address checksum is invalid — a typo would send funds to the wrong place.',
+    message: 'The address checksum is invalid. A typo would send funds to the wrong place.',
     nextStep: 'Copy the address again from the recipient in EIP-55 (mixed-case) form.',
   },
   AMOUNT_OUT_OF_RANGE: {
