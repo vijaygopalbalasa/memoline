@@ -90,9 +90,21 @@ const UNSAFE_RE = /[^A-Za-z0-9 ._:\-/=#@,+]/g;
 
 function plainMemoText(hex: Hex): string | null {
   if (!hex || hex === '0x') return null;
+  // Text right-padded into a 32-byte word (a bytes32 string) is still text: drop the padding.
+  let bytes = hexToBytes(hex);
+  let end = bytes.length;
+  while (end > 0 && bytes[end - 1] === 0) end--;
+  bytes = bytes.subarray(0, end);
+  if (bytes.length === 0) return null;
+  // What is left must look like text. A leading zero byte means a left-padded ABI word (a number, an
+  // address, a hash), whose low bytes can happen to be letters: uint256 12345 ends in "09". A memo
+  // that is mostly control bytes is binary too. Both are ids, not something a person wrote.
+  if (bytes[0] === 0) return null;
+  const controls = bytes.reduce((n, b) => (b < 0x20 || b === 0x7f ? n + 1 : n), 0);
+  if (controls * 2 > bytes.length) return null;
   let text: string;
   try {
-    text = UTF8.decode(hexToBytes(hex));
+    text = UTF8.decode(bytes);
   } catch {
     return null;
   }
@@ -112,7 +124,8 @@ function plainMemoText(hex: Hex): string | null {
  * memo bytes as `stringToHex('order=2026-0001')`, which is not Memoline's JSON format.
  *
  * The bytes are attacker-controlled and end up on screen and in exports, so the text is cleaned:
- * strict UTF-8 only (anything else is binary and gives null), markup tags removed whole, every
+ * strict UTF-8 only, and bytes that look like an ABI word or are mostly control bytes give null (they
+ * are binary ids, not text); markup tags are removed whole, every
  * character outside the safe set dropped (this removes control characters, quotes, angle brackets,
  * direction overrides and all non-ASCII), whitespace collapsed to single spaces, and the result
  * capped at 64 characters. Returns null when nothing printable remains, and null for Memoline's

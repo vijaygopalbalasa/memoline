@@ -1,5 +1,5 @@
 import fc from 'fast-check';
-import { hexToString, keccak256, stringToHex } from 'viem';
+import { encodeAbiParameters, hexToString, keccak256, stringToHex, toHex } from 'viem';
 import { describe, expect, it } from 'vitest';
 import {
   decodeMemoData,
@@ -128,6 +128,23 @@ describe('memo text written by other Arc apps', () => {
   });
   it('turns line breaks and tabs into single spaces and trims the ends', () => {
     expect(decodeMemoText(stringToHex('  order=1\r\n\tpaid   in full \n'))).toBe('order=1 paid in full');
+  });
+  it('gives null for ABI-encoded numbers and tuples, which are ids, not text', () => {
+    for (const n of [12345n, 49n, 65n, 100n, 0x494e56n]) {
+      expect(decodeMemoText(encodeAbiParameters([{ type: 'uint256' }], [n]))).toBeNull();
+    }
+    expect(
+      decodeMemoText(encodeAbiParameters([{ type: 'uint256' }, { type: 'uint256' }], [0x494e56n, 0x31n])),
+    ).toBeNull();
+    // An address or a hash left-padded into a word is binary too.
+    expect(
+      decodeMemoText(
+        encodeAbiParameters([{ type: 'address' }], ['0x0000000000000000000000000000000000000049']),
+      ),
+    ).toBeNull();
+  });
+  it('gives null when most of the bytes are control characters', () => {
+    expect(decodeMemoText(toHex(new Uint8Array([1, 2, 3, 0x41, 4, 5, 6, 0x42])))).toBeNull();
   });
   it('reads a short text padded to 32 bytes with zeros', () => {
     expect(decodeMemoText(stringToHex('order=1', { size: 32 }))).toBe('order=1');
