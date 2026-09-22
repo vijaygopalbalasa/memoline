@@ -2,41 +2,55 @@
 
 **Live:** mainnet https://memoline-one.vercel.app · testnet https://memoline-testnet.vercel.app
 
-Memoline is a non-custodial back office for stablecoin payouts on [Arc](https://docs.arc.io). You paste a
-CSV of recipients, your own wallet signs each batch, and every payment carries an on-chain memo that
-Memoline turns back into a reconciled ledger line. There is no custody, no server-held keys, and no fiat:
-it only moves and reconciles USDC/EURC that are already on Arc.
+Memoline is a non-custodial back office for stablecoin payouts on [Arc](https://docs.arc.io). You give it
+a CSV of recipients, amounts and invoice references; your own wallet signs each batch of up to a hundred
+payments; every payment carries its reference on-chain through Arc's Memo contract; and Memoline turns the
+receipts back into ledger lines that tie out to the cent. It holds no keys and no funds, and touches no
+fiat: it only moves and reconciles USDC and EURC that are already on Arc.
 
-## 60-second quick start
+## Try it in two minutes, no wallet needed
 
-1. Open the app and **connect a wallet** (any EOA; see [Known limits](#known-limits)).
-2. **Sign in** with SIWE (a free signature, no gas).
-3. **Paste a CSV** (`recipient,amount,reference`, one row per payment).
-4. Review **validation** results (bad checksums, duplicate recipients/references, amount limits).
-5. **Check the batch on Arc**. Your balance is checked against the total and every payment is
+1. **Check a payout file.** Open [`/check`](https://memoline-one.vercel.app/check) and press *Try the
+   sample file*. Memoline parses the file with the payout's own rules, checks the paying wallet's
+   balance, and simulates every payment on Arc from that address in one `eth_call`: which payments would
+   go through, which would be set aside and why, how many transactions you would sign and the most the
+   gas could cost. On the testnet twin the sample includes a recipient the USDC issuer has blocklisted, so
+   you can see a payment set aside with its reason.
+2. **Reconcile any address.** On the [home page](https://memoline-one.vercel.app/#reconcile), press *try
+   it with a live example address* (or paste any Arc address). You get its USDC and EURC movements as
+   ledger lines: direction, amount, counterparty, the reference decoded from the on-chain memo, and gas
+   to the last unit, each movement counted once.
+3. **Read a transaction as ledger lines.** Any transaction hash at `/tx/<hash>` is read back the same way,
+   which is the page a payer can send to a recipient or an accountant as proof.
+
+## Paying a file (with a wallet)
+
+1. Open the app and **connect a wallet** (a regular wallet such as MetaMask or Rabby; see
+   [Known limits](#known-limits)), then sign one message to sign in. Signing in never moves funds.
+2. **Upload the CSV** (`recipient,amount,reference`, one row per payment). Every row is checked: address
+   and checksum, amount to six decimals, duplicate recipients and references flagged.
+3. **Check the batch on Arc.** Your balance is checked against the total plus gas, and every payment is
    simulated from your address; anything that would fail is set aside with its reason before you sign.
-6. **Sign** each transaction (up to 100 payments) in your wallet, reading the review panel first
-   (total, count, network, contract, estimated gas).
-7. Watch the run reconcile from the transaction receipt, then **export** the run and ledger as CSV/JSON.
+4. **Sign** each transaction (up to 100 payments) in your wallet, after reading the review panel: total,
+   count, network, contract and estimated gas.
+5. The run **reconciles** from the receipts, and the run and the ledger **export** as CSV or JSON, with a
+   footer that equals the sum of the rows.
 
 ## Import
 
-`/import` reconciles any Arc address, including ones you don't control, into a read-only ledger view:
-paste an address, get back a reconciled list of USDC/EURC movements with references and fees. Nothing is
-stored: an anonymous import runs entirely in the request and covers the most recent ~200,000 blocks
-(~28 h) or 2,000 entries, whichever comes first, scanned newest-first so a scan cut short by the time
-budget still returns recent activity rather than old history, and is best-effort against a public RPC;
-it always returns whatever it actually scanned within its deadline rather than hanging (see
-[Known limits](#known-limits)). Signing in additionally lets a workspace start a **stored** import that
-keeps paging further back in the background (a Vercel cron job continues it in bounded steps) and persists
-to that workspace's ledger with full history.
+Reconciling an address you don't sign for works two ways. **Anonymous** (home page and `/import`, no
+sign-in): the newest day of Arc (172,800 blocks, or 2,000 entries) is read newest first, so a read cut
+short by its time budget still returns recent activity. Nothing is written to a database; the finished
+result is held in server memory for five minutes so a repeat request answers at once. **Stored** (signed
+in): a workspace imports the last 7 or 30 days of an address into its ledger in bounded steps, continued
+from the ledger page or by a daily cron.
 
 ## Arc features used
 
 - **Memo + Multicall3From (`aggregate3`) via the CallFrom precompile.** Every payout row is
   `Memo.memo(token, transfer(recipient, amount), memoId, memoData)`, batched through
-  `Multicall3From.aggregate3` so the batch runs from your EOA (not a relayer) and the whole chunk is atomic
-  one call either pays every row in it or none of them.
+  `Multicall3From.aggregate3` so the batch runs from your own wallet (not a relayer) and each transaction
+  is atomic: it pays every row in it or none of them.
 - **System-emitter (EIP-7708-style) reconciliation, with the double-log trap.** On Arc, native-value
   transfers, including the value side of an ERC-20 transfer, are logged by a virtual system-emitter
   address, *and* the USDC/EURC token contract also emits its own ERC-20 `Transfer` log for the same
@@ -67,10 +81,10 @@ Verified end to end:
   0 failed** on Arc Testnet, including a live EURC payout (T8).
 - **`import-e2e` acceptance suite** (`scripts/testnet/import-e2e.ts`): **5/5 passed** against the
   signer's live testnet history.
-- **Manual wallet run on the deployed testnet app (2026-09-22):** a 3-row payout and a 120-row payout
-  (two transactions) signed in MetaMask; the kill-the-tab, two-tabs-racing, reject-in-wallet and
-  wrong-network paths exercised by hand; exports opened in a spreadsheet and tied out.
-- **333 unit/integration tests** across `packages/ledger` and `apps/web` (`pnpm test`), plus the same
+- **Manual wallet run on the deployed testnet app (2026-09-22):** a 3-row payout and the first
+  transaction (100 rows) of a 120-row payout signed in MetaMask; the kill-the-tab, two-tabs-racing,
+  reject-in-wallet and wrong-network paths exercised by hand.
+- **355 unit/integration tests** across `packages/ledger` and `apps/web` (`pnpm test`), plus the same
   web suite on a real PostgreSQL 17 with connection contention (CI runs both).
 
 Not yet done: the 5-USDC mainnet smoke payout (`scripts/mainnet/smoke.ts`, human-run). Payment links and
@@ -124,7 +138,7 @@ See `.env.example` for the full, current list with defaults and explanations.
 ## Tests
 
 ```bash
-pnpm test        # 333 unit/integration tests, packages/ledger + apps/web, no network access
+pnpm test        # 355 unit/integration tests, packages/ledger + apps/web, no network access
 TEST_DATABASE_URL=postgres://localhost/postgres pnpm --filter @memoline/web test   # same suite on real Postgres
 pnpm lint         # Biome
 pnpm typecheck    # strict TypeScript, every workspace

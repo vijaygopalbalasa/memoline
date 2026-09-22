@@ -1,8 +1,8 @@
 # Deploying Memoline
 
-This is the human's checklist for taking `apps/web` from a laptop to a live mainnet deployment. Nothing
-here has been run yet. Accounts, Neon, WalletConnect/Reown, Vercel, and the mainnet smoke transaction are
-all still to do (see `PROGRESS.md`). Follow it in order; each step assumes the ones before it are done.
+The checklist for taking `apps/web` from a laptop to a live mainnet deployment: accounts, database,
+RPC keys, Vercel, the daily cron, the real-Postgres test pass and a small mainnet smoke payout. Follow
+it in order; each step assumes the ones before it are done.
 
 ## 1. Accounts you need
 

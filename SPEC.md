@@ -406,7 +406,7 @@ Full happy path with three wallets · reject and refund · expiry refund · prov
 - **Transaction safety UI.** Before every signature show: network, contract being called, token, total amount, number of recipients, estimated fee in USDC. Wrong network → block and offer to switch.
 - **Errors.** Every failure has a human sentence and a next step. Map known Arc reverts (blocked address, zero address, insufficient funds) to specific messages.
 - **Observability.** Structured logs with run, chunk and link IDs. An internal page for stuck chunks, webhook failures and cursor lag.
-- **Traction metrics** (you will need these for a Circle grant application): runs, rows paid, links paid, total volume by token, unique senders, unique payees, weekly active workspaces. Aggregate only; nothing personal.
+- **Traction metrics** (published as aggregates on `/stats`): runs, rows paid, links paid, total volume by token, unique senders, unique payees, weekly active workspaces. Aggregate only; nothing personal.
 - **Accessibility and mobile.** The pay page must work well in mobile wallet browsers.
 
 ---
