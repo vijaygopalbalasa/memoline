@@ -88,7 +88,7 @@ Verified end to end:
 - **Manual wallet run on the deployed testnet app (2026-09-22):** a 3-row payout and the first
   transaction (100 rows) of a 120-row payout signed in MetaMask; the kill-the-tab, two-tabs-racing,
   reject-in-wallet and wrong-network paths exercised by hand.
-- **478 unit/integration tests** across `packages/ledger` and `apps/web` (`pnpm test`), plus the same
+- **485 unit/integration tests** across `packages/ledger` and `apps/web` (`pnpm test`), plus the same
   web suite on a real PostgreSQL 17 with connection contention (both run in `.github/workflows/ci.yml`).
 
 Not yet done: the first real payout through the mainnet app. Payment links and the ERC-8183 escrow slice
@@ -144,7 +144,7 @@ See `.env.example` for the full, current list with defaults and explanations.
 ## Tests
 
 ```bash
-pnpm test        # 478 unit/integration tests, packages/ledger + apps/web, no network access
+pnpm test        # 485 unit/integration tests, packages/ledger + apps/web, no network access
 TEST_DATABASE_URL=postgres://localhost/postgres pnpm --filter @memoline/web test   # same suite on real Postgres
 pnpm lint         # Biome
 pnpm typecheck    # strict TypeScript, every workspace
@@ -184,3 +184,8 @@ specific payout.
 ## License
 
 [Apache-2.0](./LICENSE)
+
+## Author
+
+Built and operated by Vijaygopal Balasa ([github.com/vijaygopalbalasa](https://github.com/vijaygopalbalasa)).
+Questions, deletion requests and security reports: open an issue on this repository.

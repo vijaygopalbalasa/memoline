@@ -19,6 +19,7 @@ export type ErrorCode =
   | 'REFERENCE_INVALID'
   | 'MEMO_TOO_LARGE'
   | 'WRONG_NETWORK'
+  | 'TX_PENDING'
   | 'UNKNOWN';
 
 export type LedgerError = { code: ErrorCode; message: string; nextStep: string; detail?: unknown };
@@ -91,6 +92,11 @@ const CATALOG: Record<ErrorCode, { message: string; nextStep: string }> = {
     nextStep: 'Use letters, digits and . _ : - (max 64 chars). References are public.',
   },
   MEMO_TOO_LARGE: { message: 'The memo data exceeds 256 bytes.', nextStep: 'Shorten the reference.' },
+  TX_PENDING: {
+    message: 'A transaction from this wallet is still waiting to be mined.',
+    nextStep:
+      'Wait until the explorer shows it confirmed, then check the chain again. If it is this payout, the page will adopt it; sign nothing until then.',
+  },
   WRONG_NETWORK: {
     message: 'Your wallet is on a different network than this run.',
     nextStep: 'Switch your wallet to Arc (or Arc Testnet) and try again.',
