@@ -4,16 +4,16 @@
 
 Memoline is a non-custodial back office for stablecoin payouts on [Arc](https://docs.arc.io). You paste a
 CSV of recipients, your own wallet signs each batch, and every payment carries an on-chain memo that
-Memoline turns back into a reconciled ledger line. There is no custody, no server-held keys, and no fiat —
+Memoline turns back into a reconciled ledger line. There is no custody, no server-held keys, and no fiat:
 it only moves and reconciles USDC/EURC that are already on Arc.
 
 ## 60-second quick start
 
-1. Open the app and **connect a wallet** (any EOA — see [Known limits](#known-limits)).
+1. Open the app and **connect a wallet** (any EOA; see [Known limits](#known-limits)).
 2. **Sign in** with SIWE (a free signature, no gas).
 3. **Paste a CSV** (`recipient,amount,reference`, one row per payment).
 4. Review **validation** results (bad checksums, duplicate recipients/references, amount limits).
-5. **Check the batch on Arc** — your balance is checked against the total and every payment is
+5. **Check the batch on Arc**. Your balance is checked against the total and every payment is
    simulated from your address; anything that would fail is set aside with its reason before you sign.
 6. **Sign** each transaction (up to 100 payments) in your wallet, reading the review panel first
    (total, count, network, contract, estimated gas).
@@ -21,11 +21,11 @@ it only moves and reconciles USDC/EURC that are already on Arc.
 
 ## Import
 
-`/import` reconciles any Arc address — including ones you don't control — into a read-only ledger view:
+`/import` reconciles any Arc address, including ones you don't control, into a read-only ledger view:
 paste an address, get back a reconciled list of USDC/EURC movements with references and fees. Nothing is
 stored: an anonymous import runs entirely in the request and covers the most recent ~200,000 blocks
 (~28 h) or 2,000 entries, whichever comes first, scanned newest-first so a scan cut short by the time
-budget still returns recent activity rather than old history, and is best-effort against a public RPC —
+budget still returns recent activity rather than old history, and is best-effort against a public RPC;
 it always returns whatever it actually scanned within its deadline rather than hanging (see
 [Known limits](#known-limits)). Signing in additionally lets a workspace start a **stored** import that
 keeps paging further back in the background (a Vercel cron job continues it in bounded steps) and persists
@@ -36,13 +36,13 @@ to that workspace's ledger with full history.
 - **Memo + Multicall3From (`aggregate3`) via the CallFrom precompile.** Every payout row is
   `Memo.memo(token, transfer(recipient, amount), memoId, memoData)`, batched through
   `Multicall3From.aggregate3` so the batch runs from your EOA (not a relayer) and the whole chunk is atomic
-  — one call either pays every row in it or none of them.
+  one call either pays every row in it or none of them.
 - **System-emitter (EIP-7708-style) reconciliation, with the double-log trap.** On Arc, native-value
-  transfers — including the value side of an ERC-20 transfer — are logged by a virtual system-emitter
+  transfers, including the value side of an ERC-20 transfer, are logged by a virtual system-emitter
   address, *and* the USDC/EURC token contract also emits its own ERC-20 `Transfer` log for the same
   movement. Reading both as separate payments double-counts every transfer. Memoline treats the
   system-emitter log as the only source of truth for value moved and only *counts* (never sums) the
-  token contract's duplicate — proven in a fixture receipt that carries three of each and reconciling to
+  token contract's duplicate. This is proven in a fixture receipt that carries three of each and reconciles to
   exactly three payments.
 - **EIP-7825-aware chunking.** Arc caps a transaction at 16,777,216 gas. Memoline measured ~53k gas per
   memo'd row on testnet and chunks payout batches at 100 rows per transaction, well under the cap, and
@@ -61,7 +61,7 @@ https://memoline-testnet.vercel.app (chain `5042002`). Every push to `main` rede
 
 Verified end to end:
 
-- **Spike 0** — Mode A (Multicall3From → Memo preserves the EOA sender) confirmed on-chain; ~53k gas per
+- **Spike 0**: Mode A (Multicall3From → Memo preserves the EOA sender) confirmed on-chain; ~53k gas per
   row; 100 rows/tx set as the batch cap; EIP-7702-delegated senders work.
 - **`payout-e2e` acceptance suite** (`scripts/testnet/payout-e2e.ts`, T1–T10): **10 passed, 0 skipped,
   0 failed** on Arc Testnet, including a live EURC payout (T8).
@@ -81,7 +81,7 @@ the ERC-8183 escrow slice are future work, not part of this build.
 - **EOA senders only.** The CallFrom precompile that Memo/Multicall3From rely on requires the caller to be
   `tx.origin`; a smart-contract wallet (Safe, ERC-4337 account) cannot be the sender of a Memo'd payout.
 - **Anonymous import scans the most recent blocks, newest first, best-effort within a time budget on a
-  public RPC.** No sign-in, nothing stored — capped at the most recent ~200,000 blocks (~28 h) or 2,000
+  public RPC.** No sign-in, nothing stored. Capped at the most recent ~200,000 blocks (~28 h) or 2,000
   entries (and 500 enriched receipts, 5,000 raw logs) per address, whichever limit is hit first, against
   whichever public RPC is configured. On a slow/rate-limited public RPC the scan can stop before reaching
   the full window; because it walks backward from the chain head, a scan cut short still returns the
@@ -110,7 +110,7 @@ pnpm dev --filter @memoline/web        # or: cd apps/web && pnpm dev
 |---|---|---|
 | `DATABASE_URL` | yes | Postgres connection string. |
 | `SESSION_SECRET` | yes | ≥ 32 chars, random. |
-| `WALLETCONNECT_PROJECT_ID` | yes* | Free at [reown.com](https://reown.com). *Skippable only with `ALLOW_PLACEHOLDER_WALLETCONNECT=1`, for secret-less CI builds — never in a real deployment. |
+| `WALLETCONNECT_PROJECT_ID` | yes* | Free at [reown.com](https://reown.com). *Skippable only with `ALLOW_PLACEHOLDER_WALLETCONNECT=1`, for secret-less CI builds, never in a real deployment. |
 | `CHAIN_ENV` | no | `testnet` (default) or `mainnet`. |
 | `ARC_RPC_PRIMARY` / `ARC_RPC_FALLBACK` | no | Mainnet RPC; sensible public defaults are baked in. |
 | `ARC_TESTNET_RPC_PRIMARY` / `ARC_TESTNET_RPC_FALLBACK` | no | Testnet RPC; same. |
@@ -138,7 +138,7 @@ pnpm --filter @memoline/scripts payout-e2e   # T1–T10 acceptance suite
 pnpm --filter @memoline/scripts import-e2e   # reconciles the signer's own testnet history
 ```
 
-`scripts/mainnet/smoke.ts` is the mainnet equivalent of `payout-e2e`'s T1 (3 rows, 5.00 USDC total) — see
+`scripts/mainnet/smoke.ts` is the mainnet equivalent of `payout-e2e`'s T1 (3 rows, 5.00 USDC total); see
 `DEPLOY.md`. It is destructive (it signs and sends a real transaction) and is never run by CI; a person runs it by hand with a wallet set aside for that purpose.
 
 ## Security model
