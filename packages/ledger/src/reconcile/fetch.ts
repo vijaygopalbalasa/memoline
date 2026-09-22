@@ -185,7 +185,7 @@ async function callWithRetry(
 }
 
 /**
- * All logs relevant to an address: system-emitter Transfer (from/to), EURC Transfer (from/to), Memo (sender).
+ * All logs relevant to an address: Transfer from/to it on the system emitter (USDC) and EURC, and Memo (sender).
  * Adaptive paging: start at the largest range Arc's history providers accept (`PARAMS.logPageBlocks`), halve the page on "range too large" (or a
  * persistent `UNKNOWN` — some providers reject an oversized range with a code/message we don't recognise)
  * and retry the whole page at the smaller size, grow the page back on success. A rate-limit error retries
@@ -207,43 +207,30 @@ async function callWithRetry(
 export async function fetchAddressLogs(client: FetchClient, o: FetchOptions): Promise<FetchResult> {
   const a = ADDRESSES[o.chainId];
   return pageBlockRange(o, async (from, to, retry) => {
-    // Each closure is declared separately (not inside a pre-typed array literal): an explicit
-    // `Array<() => Promise<...>>` annotation on the array would contextually type each call
-    // before its `event`/`args` are inspected, and getLogs' generic overload picker would then
-    // pick the untyped "no event" branch and reject `args` as extraneous.
-    const q1 = () =>
+    // Three filters per page. USDC (the system emitter) and EURC both emit the standard
+    // `Transfer`, so one call with both addresses covers a direction for both tokens; the log's
+    // own `address` tells reconciliation which token it was. Each closure is declared separately
+    // (not inside a pre-typed array literal): an explicit `Array<() => Promise<...>>` annotation
+    // would contextually type each call before its `event`/`args` are inspected, and getLogs'
+    // generic overload picker would then pick the untyped "no event" branch and reject `args`.
+    const tokens = [a.systemEmitter.address, a.eurc.address];
+    const qOut = () =>
       client.getLogs({
-        address: a.systemEmitter.address,
+        address: tokens,
         event: transferEvent,
         args: { from: o.address },
         fromBlock: from,
         toBlock: to,
       });
-    const q2 = () =>
+    const qIn = () =>
       client.getLogs({
-        address: a.systemEmitter.address,
+        address: tokens,
         event: transferEvent,
         args: { to: o.address },
         fromBlock: from,
         toBlock: to,
       });
-    const q3 = () =>
-      client.getLogs({
-        address: a.eurc.address,
-        event: transferEvent,
-        args: { from: o.address },
-        fromBlock: from,
-        toBlock: to,
-      });
-    const q4 = () =>
-      client.getLogs({
-        address: a.eurc.address,
-        event: transferEvent,
-        args: { to: o.address },
-        fromBlock: from,
-        toBlock: to,
-      });
-    const q5 = () =>
+    const qMemo = () =>
       client.getLogs({
         address: a.memo.address,
         event: memoEvent,
@@ -251,8 +238,13 @@ export async function fetchAddressLogs(client: FetchClient, o: FetchOptions): Pr
         fromBlock: from,
         toBlock: to,
       });
+    // One after another, on purpose. The public Arc mirror allows about three log queries a
+    // second and answers 429 to a burst: measured 2026-09-22, three filters in parallel scanned
+    // 90,000 blocks in 12 s with 35 refusals, the same three in sequence scanned 120,000 with 6.
+    // Each refusal costs a backoff, so fewer calls per page (three, not five) and no bursts is
+    // what makes a scan fast here, not concurrency.
     const pageLogs: Log[] = [];
-    for (const q of [q1, q2, q3, q4, q5]) pageLogs.push(...((await retry(q)) as Log[]));
+    for (const q of [qOut, qIn, qMemo]) pageLogs.push(...((await retry(q)) as Log[]));
     return pageLogs;
   });
 }

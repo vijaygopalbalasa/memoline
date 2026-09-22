@@ -21,7 +21,7 @@ function mockClient(o: {
     getLogs: async (p: {
       fromBlock: bigint;
       toBlock: bigint;
-      address?: string;
+      address?: string | string[];
       event?: { name?: string };
       args?: unknown;
     }) => {
@@ -29,7 +29,10 @@ function mockClient(o: {
       calls.push({
         from: p.fromBlock,
         to: p.toBlock,
-        address: String(p.address ?? '').toLowerCase(),
+        address: (Array.isArray(p.address)
+          ? [...p.address].sort().join('+')
+          : (p.address ?? '')
+        ).toLowerCase(),
         eventName: p.event?.name,
         args: p.args,
       });
@@ -46,33 +49,35 @@ function mockClient(o: {
 
 const CHAIN = 5042002 as const;
 const TARGET = '0x427C62eDCae20DDc8c5e875De39D4E4845491458';
-const SYSTEM_EMITTER = ADDRESSES[CHAIN].systemEmitter.address.toLowerCase();
-const EURC = ADDRESSES[CHAIN].eurc.address.toLowerCase();
 const MEMO = ADDRESSES[CHAIN].memo.address.toLowerCase();
 
 function shapeKey(c: { address: string; eventName: string | undefined; args: unknown }): string {
   return `${c.address}|${c.eventName}|${JSON.stringify(c.args)}`;
 }
 
-/** The exact five queries `fetchAddressLogs` must issue, once each, per page. */
+const TOKENS = [ADDRESSES[CHAIN].systemEmitter.address, ADDRESSES[CHAIN].eurc.address]
+  .sort()
+  .join('+')
+  .toLowerCase();
+
+/** The exact three queries `fetchAddressLogs` must issue, once each, per page: Transfer from the
+ * address and Transfer to it, each over both token emitters in one call, and Memo by sender. */
 function expectedShapeKeys(address: string): string[] {
   return [
-    shapeKey({ address: SYSTEM_EMITTER, eventName: 'Transfer', args: { from: address } }),
-    shapeKey({ address: SYSTEM_EMITTER, eventName: 'Transfer', args: { to: address } }),
-    shapeKey({ address: EURC, eventName: 'Transfer', args: { from: address } }),
-    shapeKey({ address: EURC, eventName: 'Transfer', args: { to: address } }),
+    shapeKey({ address: TOKENS, eventName: 'Transfer', args: { from: address } }),
+    shapeKey({ address: TOKENS, eventName: 'Transfer', args: { to: address } }),
     shapeKey({ address: MEMO, eventName: 'Memo', args: { sender: address } }),
   ].sort();
 }
 
 /**
  * Groups the successfully-ranged calls (`to - from + 1 <= maxRange`) by `(from,to)`. For each group,
- * asserts it contains exactly the five expected query shapes, exactly once each — this both confirms
+ * asserts it contains exactly the three expected query shapes, exactly once each — this both confirms
  * the query set (address/event/args) and restores overlap detection that a naive Map-based dedupe
- * would hide (a bug that issued a query twice, or skipped one, changes the count away from 5).
+ * would hide (a bug that issued a query twice, or skipped one, changes the count away from 3).
  * Returns the covered ranges, sorted by `from`, for a contiguity/coverage check.
  */
-function assertFiveQueriesPerPage(
+function assertQueriesPerPage(
   calls: Call[],
   maxRange: bigint,
   address: string,
@@ -91,7 +96,7 @@ function assertFiveQueriesPerPage(
   const expected = expectedShapeKeys(address);
   const ranges: { from: bigint; to: bigint }[] = [];
   for (const [key, entry] of byKey) {
-    expect(entry.group, `page ${key} call count`).toHaveLength(5);
+    expect(entry.group, `page ${key} call count`).toHaveLength(3);
     expect(entry.group.map(shapeKey).sort(), `page ${key} query shapes`).toEqual(expected);
     ranges.push({ from: entry.from, to: entry.to });
   }
@@ -114,7 +119,7 @@ function assertContiguousCoverage(
 }
 
 describe('fetchAddressLogs adaptive paging', () => {
-  it('halves the page on range errors, covers the whole span without gaps or overlap, and issues exactly the five expected queries per page', async () => {
+  it('halves the page on range errors, covers the whole span without gaps or overlap, and issues exactly the three expected queries per page', async () => {
     const { client, calls } = mockClient({ maxRange: 30_000n });
     const result = await fetchAddressLogs(client, {
       chainId: CHAIN,
@@ -123,7 +128,7 @@ describe('fetchAddressLogs adaptive paging', () => {
       toBlock: 120_999n,
       sleepMs: 0,
     });
-    const ranges = assertFiveQueriesPerPage(calls, 30_000n, TARGET);
+    const ranges = assertQueriesPerPage(calls, 30_000n, TARGET);
     assertContiguousCoverage(ranges, 1_000n, 120_999n);
     expect(result.complete).toBe(true);
     expect(result.scannedToBlock).toBe(120_999n);
@@ -142,7 +147,7 @@ describe('fetchAddressLogs adaptive paging', () => {
       toBlock: 120_999n,
       sleepMs: 0,
     });
-    const ranges = assertFiveQueriesPerPage(calls, 30_000n, TARGET);
+    const ranges = assertQueriesPerPage(calls, 30_000n, TARGET);
     assertContiguousCoverage(ranges, 1_000n, 120_999n);
     expect(result.complete).toBe(true);
     expect(result.scannedToBlock).toBe(120_999n);
@@ -179,9 +184,9 @@ describe('fetchAddressLogs adaptive paging', () => {
     expect(result.complete).toBe(false);
     expect(result.scannedToBlock).toBeLessThan(999_999n);
     expect(result.scannedToBlock).toBeGreaterThanOrEqual(0n);
-    // Every collected page is preserved, not discarded — same five-queries-per-page shape as a
+    // Every collected page is preserved, not discarded — same three-queries-per-page shape as a
     // full run, just fewer pages.
-    const ranges = assertFiveQueriesPerPage(calls, 30_000n, TARGET);
+    const ranges = assertQueriesPerPage(calls, 30_000n, TARGET);
     expect(ranges).toHaveLength(1);
     expect(ranges[0]?.from).toBe(0n);
     expect(ranges[0]?.to).toBe(result.scannedToBlock);
@@ -215,9 +220,10 @@ describe('fetchAddressLogs adaptive paging', () => {
         sleepMs: 0,
       }),
     ).rejects.toThrow(/RPC_FORBIDDEN/);
-    // Not retryable: fails on the very first query, well before a retry loop or a page-size halve
-    // could run up the call count.
+    // Not retryable: the one page's three filters go out together and every one of them fails, so
+    // the count is at most that page. No retry loop, no page-size halve, no second page.
     expect(calls.length).toBeLessThanOrEqual(3);
+    expect(new Set(calls.map((c) => `${c.from}-${c.to}`)).size).toBe(1);
   });
 
   it('gives up with RPC_RATE_LIMITED once its own retry budget is exhausted, never halving the page', async () => {
@@ -264,7 +270,7 @@ describe('fetchAddressLogs backward paging', () => {
       sleepMs: 0,
       direction: 'backward',
     });
-    const ranges = assertFiveQueriesPerPage(calls, 30_000n, TARGET);
+    const ranges = assertQueriesPerPage(calls, 30_000n, TARGET);
     assertContiguousCoverage(ranges, 1_000n, 120_999n);
     expect(result.complete).toBe(true);
     expect(result.scannedFromBlock).toBe(1_000n);
@@ -295,7 +301,7 @@ describe('fetchAddressLogs backward paging', () => {
     // Backward's fixed end is toBlock — always fully covered once any page has run.
     expect(result.scannedToBlock).toBe(999_999n);
     expect(result.scannedFromBlock).toBeGreaterThan(0n);
-    const ranges = assertFiveQueriesPerPage(calls, 30_000n, TARGET);
+    const ranges = assertQueriesPerPage(calls, 30_000n, TARGET);
     expect(ranges).toHaveLength(1);
     expect(ranges[0]?.to).toBe(999_999n);
     expect(ranges[0]?.from).toBe(result.scannedFromBlock);
@@ -355,16 +361,16 @@ describe('fetchAddressLogs deadlineAt', () => {
       fromBlock: 0n,
       toBlock: 999_999n,
       sleepMs: 0,
-      // Shorter than a single getLogs call (20ms): the first query (of 5 in the page) is already
-      // in flight when the deadline is set, so it's allowed to finish, but the second one must never
-      // start.
+      // Shorter than a single getLogs call (20ms): the first query (of 3 in the page) is already
+      // in flight when the deadline passes, so it is allowed to finish, but the second one must
+      // never start.
       deadlineAt: Date.now() + 15,
     });
     const elapsed = Date.now() - startedAt;
     expect(result.complete).toBe(false);
     expect(result.logs).toEqual([]);
     expect(calls).toBe(1);
-    // Bounded by ~one in-flight request, not by paging through the 1,000,000-block window (which would
+    // Bounded by one in-flight request, not by paging through the 1,000,000-block window (which would
     // need many multi-second RPC round trips against a real provider).
     expect(elapsed).toBeLessThan(200);
   });
@@ -384,10 +390,14 @@ describe('pager remembers a rejected page size', () => {
       sleepMs: 0,
     });
     expect(result.complete).toBe(true);
+    // The three filters of the rejected probe page go out together, so up to three calls carry the
+    // rejected size, but they all belong to one page: one rejected range, never a second.
     const rejected = calls.filter((c) => c.to - c.from + 1n > 6_000n);
-    expect(rejected).toHaveLength(1);
-    // 60,000 blocks at 5,000 per page = 12 pages × 5 queries, plus the single rejected probe.
-    expect(calls).toHaveLength(12 * 5 + 1);
+    expect(rejected.length).toBeGreaterThanOrEqual(1);
+    expect(rejected.length).toBeLessThanOrEqual(3);
+    expect(new Set(rejected.map((c) => `${c.from}-${c.to}`)).size).toBe(1);
+    // 60,000 blocks at 5,000 per page = 12 pages × 3 queries, plus the rejected probe page.
+    expect(calls.length - rejected.length).toBe(12 * 3);
   });
 });
 

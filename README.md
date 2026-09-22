@@ -70,7 +70,7 @@ Verified end to end:
 - **Manual wallet run on the deployed testnet app (2026-09-22):** a 3-row payout and a 120-row payout
   (two transactions) signed in MetaMask; the kill-the-tab, two-tabs-racing, reject-in-wallet and
   wrong-network paths exercised by hand; exports opened in a spreadsheet and tied out.
-- **329 unit/integration tests** across `packages/ledger` and `apps/web` (`pnpm test`), plus the same
+- **332 unit/integration tests** across `packages/ledger` and `apps/web` (`pnpm test`), plus the same
   web suite on a real PostgreSQL 17 with connection contention (CI runs both).
 
 Not yet done: the 5-USDC mainnet smoke payout (`scripts/mainnet/smoke.ts`, human-run). Payment links and
@@ -124,7 +124,7 @@ See `.env.example` for the full, current list with defaults and explanations.
 ## Tests
 
 ```bash
-pnpm test        # 329 unit/integration tests, packages/ledger + apps/web, no network access
+pnpm test        # 332 unit/integration tests, packages/ledger + apps/web, no network access
 TEST_DATABASE_URL=postgres://localhost/postgres pnpm --filter @memoline/web test   # same suite on real Postgres
 pnpm lint         # Biome
 pnpm typecheck    # strict TypeScript, every workspace
