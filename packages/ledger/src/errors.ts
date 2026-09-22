@@ -4,11 +4,9 @@ export type ErrorCode =
   | 'BLOCKLISTED'
   | 'ZERO_ADDRESS'
   | 'INSUFFICIENT_BALANCE'
-  | 'RECIPIENT_IS_CONTRACT'
   | 'SENDER_NOT_EOA'
   | 'SENDER_7702_UNSUPPORTED'
   | 'GAS_CAP_EXCEEDED'
-  | 'FEE_BELOW_FLOOR'
   | 'TX_REVERTED'
   | 'TX_DROPPED'
   | 'RPC_RATE_LIMITED'
@@ -39,10 +37,6 @@ const CATALOG: Record<ErrorCode, { message: string; nextStep: string }> = {
     message: 'The sender wallet does not hold enough of this token for this transfer.',
     nextStep: 'Top up the sender wallet or reduce the amounts, then check the batch again.',
   },
-  RECIPIENT_IS_CONTRACT: {
-    message: 'The recipient is a smart contract, not a wallet.',
-    nextStep: 'Confirm the contract can receive tokens before paying it.',
-  },
   SENDER_NOT_EOA: {
     message:
       'The connected wallet is a smart-contract account, such as a multisig. Arc memo payouts must be sent from an ordinary wallet address.',
@@ -54,12 +48,7 @@ const CATALOG: Record<ErrorCode, { message: string; nextStep: string }> = {
   },
   GAS_CAP_EXCEEDED: {
     message: 'This batch needs more gas than Arc allows in one transaction.',
-    nextStep: 'The app will split the batch into smaller transactions.',
-  },
-  FEE_BELOW_FLOOR: {
-    message:
-      'The gas price is below the 20 Gwei minimum on Arc. The network would drop the transaction silently.',
-    nextStep: 'Let the app set the fee (it clamps to the floor).',
+    nextStep: 'Split the file into smaller files and check each one again.',
   },
   TX_REVERTED: {
     message: 'The transaction reverted on-chain. Nothing was paid.',

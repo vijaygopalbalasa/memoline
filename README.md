@@ -12,7 +12,8 @@ fiat: it only moves and reconciles USDC and EURC that are already on Arc.
 
 1. **Check a payout file.** Open [`/check`](https://memoline-one.vercel.app/check) and press *Try the
    sample file*. Memoline parses the file with the payout's own rules, checks the paying wallet's
-   balance, and simulates every payment on Arc from that address in one `eth_call`: which payments would
+   balance, and simulates every payment on Arc from that address, one `eth_call` per transaction of up to
+   100 payments: which payments would
    go through, which would be set aside and why, how many transactions you would sign and the most the
    gas could cost. On the testnet twin the sample includes a recipient the USDC issuer has blocklisted, so
    you can see a payment set aside with its reason.
@@ -51,13 +52,15 @@ from the ledger page or by a daily cron.
   `Memo.memo(token, transfer(recipient, amount), memoId, memoData)`, batched through
   `Multicall3From.aggregate3` so the batch runs from your own wallet (not a relayer) and each transaction
   is atomic: it pays every row in it or none of them.
-- **System-emitter (EIP-7708-style) reconciliation, with the double-log trap.** On Arc, native-value
-  transfers, including the value side of an ERC-20 transfer, are logged by a virtual system-emitter
-  address, *and* the USDC/EURC token contract also emits its own ERC-20 `Transfer` log for the same
-  movement. Reading both as separate payments double-counts every transfer. Memoline treats the
-  system-emitter log as the only source of truth for value moved and only *counts* (never sums) the
-  token contract's duplicate. This is proven in a fixture receipt that carries three of each and reconciles to
-  exactly three payments.
+- **System-emitter (EIP-7708-style) reconciliation, with the double-log trap.** USDC is Arc's native
+  currency. Every native USDC movement, including one made through USDC's ERC-20 interface, is logged by a
+  virtual system-emitter address, *and* a transfer through the ERC-20 interface also gets a `Transfer`
+  log from the USDC contract for the same movement. Reading both as payments double-counts it. Memoline
+  treats the system-emitter log as the only source of truth for USDC and only *counts* (never sums) the
+  contract's duplicate. EURC is an ordinary ERC-20 on Arc, so it is read from its own contract log. This
+  is checked against a recorded receipt that carries three of each and reconciles to exactly three
+  payments. The trap was first documented by [arctools](https://github.com/ilkermanap/arctools), which
+  measured the phantom rows; Memoline builds the guard into a ledger and a payout flow.
 - **EIP-7825-aware chunking.** Arc caps a transaction at 16,777,216 gas. Memoline measured ~53k gas per
   memo'd row on testnet and chunks payout batches at 100 rows per transaction, well under the cap, and
   disambiguates the cap's `-32003` error from a genuine out-of-gas revert.
@@ -85,10 +88,10 @@ Verified end to end:
   transaction (100 rows) of a 120-row payout signed in MetaMask; the kill-the-tab, two-tabs-racing,
   reject-in-wallet and wrong-network paths exercised by hand.
 - **382 unit/integration tests** across `packages/ledger` and `apps/web` (`pnpm test`), plus the same
-  web suite on a real PostgreSQL 17 with connection contention (CI runs both).
+  web suite on a real PostgreSQL 17 with connection contention (both run in `.github/workflows/ci.yml`).
 
-Not yet done: the 5-USDC mainnet smoke payout (`scripts/mainnet/smoke.ts`, human-run). Payment links and
-the ERC-8183 escrow slice are future work, not part of this build.
+Not yet done: the first real payout through the mainnet app. Payment links and the ERC-8183 escrow slice
+are future work, not part of this build.
 
 ## Known limits
 
@@ -103,8 +106,10 @@ the ERC-8183 escrow slice are future work, not part of this build.
   (`scannedFromBlock`, `scannedToBlock`, `complete`) rather than hanging. Sign in for full history via a
   stored import, or configure a provider RPC key (see [DEPLOY.md](DEPLOY.md)) for a faster anonymous scan.
 - **Import prices gas per transaction the address paid for.** Gas is split pro rata across that
-  transaction's lines (the same rule the payout side uses); a transaction the address paid for that moved
-  no USDC/EURC of its own gets a gas-only line so the fee still appears in the books.
+  transaction's lines (the same rule the payout side uses). A transaction the address paid for that
+  carried a Memo but moved no USDC or EURC of its own gets a gas-only line, so the fee still appears in the
+  books. Transactions with neither a token movement nor a Memo from the address (a plain approval, for
+  example) are not read.
 - **Stored imports advance in steps.** Each "Continue import" on the ledger page reads another stretch of
   the chain; on the Vercel Hobby plan the automatic continuation runs once a day.
 
@@ -172,8 +177,8 @@ pnpm --filter @memoline/scripts import-e2e   # reconciles the signer's own testn
 
 ## Report a bug
 
-This is a pre-launch build (no mainnet deployment yet). Open an issue in this repository, including the
-run ID or transaction hash if the report involves a specific payout.
+Open an issue in this repository, including the run ID or transaction hash if the report involves a
+specific payout.
 
 ## License
 

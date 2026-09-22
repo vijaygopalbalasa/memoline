@@ -32,10 +32,13 @@ settings for deployment.
 | `ARC_RPC_FALLBACK` | — | `https://rpc.quicknode.mainnet.arc.io` | Runtime (default is fine) |
 | `ARC_TESTNET_RPC_PRIMARY` | Alchemy Arc testnet app | `https://arc-testnet.g.alchemy.com/v2/<key>` | Runtime (public default works) |
 | `ARC_TESTNET_RPC_FALLBACK` | — | `https://rpc.quicknode.testnet.arc.io` | Runtime (default is fine) |
-| `RPC_USER_AGENT` | — | `memoline/0.1 (+https://memoline.io)` | Runtime (default works; Arc's public RPCs 403 the default Node/Python user agent) |
+| `RPC_USER_AGENT` | — | `memoline/0.1 (+https://github.com/vijaygopalbalasa/memoline)` | Runtime (default works; Arc's public RPCs 403 the default Node/Python user agent) |
 | `ALLOW_7702_SENDERS` | — | `true` | Runtime (default `true`; Spike 0 verified 7702-delegated EOAs work with Memo) |
 | `CRON_SECRET` | Generate: `openssl rand -hex 32` | `a1b2...` | Runtime. Required for `/api/cron/imports` to do anything; without it the endpoint returns `503` rather than running unauthenticated (see step 5) |
-| `NEXT_PUBLIC_APP_URL` | The canonical URL of that environment | Production `https://memoline-one.vercel.app` (later `https://memoline.io`); Preview `https://memoline-testnet.vercel.app` | Runtime. Sign-in accepts the request `Host` when it is this host *or* one of the hosts Vercel injects for the deployment (`VERCEL_PROJECT_PRODUCTION_URL`, `VERCEL_URL`, `VERCEL_BRANCH_URL`), so `*.vercel.app` and per-deployment preview URLs work too; any other host is rejected. A stable alias you point at a preview (`vercel alias set …`) is *not* one of the injected hosts, which is why Preview gets its alias here. Requires "Automatically expose System Environment Variables" (on by default) |
+| `NEXT_PUBLIC_APP_URL` | The canonical URL of that environment | Production `https://memoline-one.vercel.app`; Preview `https://memoline-testnet.vercel.app` | Runtime. Sign-in accepts the request `Host` when it is this host *or* one of the hosts Vercel injects for the deployment (`VERCEL_PROJECT_PRODUCTION_URL`, `VERCEL_URL`, `VERCEL_BRANCH_URL`), so `*.vercel.app` and per-deployment preview URLs work too; any other host is rejected. A stable alias you point at a preview (`vercel alias set …`) is *not* one of the injected hosts, which is why Preview gets its alias here. Requires "Automatically expose System Environment Variables" (on by default) |
+| `PROOF_TX_HASH` | A real Memoline payout on this environment's chain | `0x…` (64 hex) | Runtime, optional. The landing page shows that transaction's ledger lines as proof. |
+| `EXAMPLE_ADDRESS` | An address with USDC or EURC activity | `0x…` | Runtime, optional. The landing page's live example and the reconcile form's example button. Defaults to the testnet signer on testnet and a busy public wallet on mainnet. |
+| `SAMPLE_SENDER` | The project's own funded wallet | `0x…` | Runtime, optional. The payer the public check's sample file is simulated from. Defaults to `EXAMPLE_ADDRESS`. |
 
 ## 3. Database migration
 

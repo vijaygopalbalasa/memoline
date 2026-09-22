@@ -22,7 +22,7 @@ import {
 } from 'viem';
 import { privateKeyToAccount } from 'viem/accounts';
 
-export const UA = 'memoline-scripts/0.1 (+https://memoline.io)';
+export const UA = 'memoline-scripts/0.1 (+https://github.com/vijaygopalbalasa/memoline)';
 export const CHAIN_ID = 5042002 as const;
 export const T = ADDRESSES[CHAIN_ID];
 

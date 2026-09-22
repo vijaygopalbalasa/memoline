@@ -79,7 +79,7 @@ import {
 } from 'viem';
 import { privateKeyToAccount } from 'viem/accounts';
 
-const UA = 'memoline-scripts/0.1 (+https://memoline.io)';
+const UA = 'memoline-scripts/0.1 (+https://github.com/vijaygopalbalasa/memoline)';
 const CHAIN_ID = 5042 as const;
 const TESTNET_SIGNER = '0x427C62eDCae20DDc8c5e875De39D4E4845491458';
 // dRPC's free tier is unsuitable for anything beyond a single eth_call/eth_sendRawTransaction (see
