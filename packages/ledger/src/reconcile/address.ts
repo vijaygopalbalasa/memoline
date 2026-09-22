@@ -1,7 +1,7 @@
 import type { Address, Hex, Log, TransactionReceipt } from 'viem';
 import { ADDRESSES, type ChainId } from '../chain/addresses.js';
 import { computeFeeNative18 } from '../chain/fees.js';
-import { decodeMemoData } from '../memo/data.js';
+import { memoReference } from '../memo/data.js';
 import { fromNative18 } from '../money/amount.js';
 import { allocateFee } from './fees.js';
 import { bracketFor, parseReceiptLogs } from './logs.js';
@@ -109,7 +109,7 @@ export function reconcileAddress(input: AddressReconcileInput): LedgerEntry[] {
           logIndex: t.logIndex,
           memoId: memo?.memoId ?? null,
           memoIndex: memo?.memoIndex ?? null,
-          reference: memo ? (decodeMemoData(memo.memo)?.ref ?? null) : null,
+          reference: memo ? memoReference(memo.memo) : null,
           sourceType: 'import',
           sourceId: input.importId,
           blockNumber: t.blockNumber,

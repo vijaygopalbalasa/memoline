@@ -1,4 +1,4 @@
-import { type Hex, hexToString, stringToHex } from 'viem';
+import { type Hex, hexToBytes, hexToString, stringToHex } from 'viem';
 
 export const MEMO_DATA_MAX_BYTES = 256;
 /** References are public and permanent on-chain: opaque IDs and invoice references only. */
@@ -74,4 +74,61 @@ export function decodeMemoData(hex: Hex): MemoData | null {
   } catch {
     return null;
   }
+}
+
+/** Longest reference kept from a memo written by another app. */
+export const MEMO_TEXT_MAX_CHARS = 64;
+
+/** Strict UTF-8: bytes that are not valid text are binary (a hash, an ABI blob), not a reference. */
+const UTF8 = new TextDecoder('utf-8', { fatal: true });
+/** Anything shaped like an HTML/XML tag, a comment or a processing instruction, removed whole. */
+const MARKUP_RE = /<\/?[A-Za-z!?][^<>]*>/g;
+/** Every kind of whitespace (tabs, line breaks, non-breaking spaces), except the zero-width BOM. */
+const WHITESPACE_RE = /[^\S\uFEFF]/g;
+/** Everything outside the safe set: ASCII letters, digits, space and . _ : - / = # @ , + */
+const UNSAFE_RE = /[^A-Za-z0-9 ._:\-/=#@,+]/g;
+
+function plainMemoText(hex: Hex): string | null {
+  if (!hex || hex === '0x') return null;
+  let text: string;
+  try {
+    text = UTF8.decode(hexToBytes(hex));
+  } catch {
+    return null;
+  }
+  const clean = text
+    .replace(MARKUP_RE, '')
+    .replace(WHITESPACE_RE, ' ')
+    .replace(UNSAFE_RE, '')
+    .replace(/ {2,}/g, ' ')
+    .trim()
+    .slice(0, MEMO_TEXT_MAX_CHARS)
+    .trimEnd();
+  return clean === '' ? null : clean;
+}
+
+/**
+ * Reads a memo written by another Arc app as a plain text reference. Arc's own tutorial writes
+ * memo bytes as `stringToHex('order=2026-0001')`, which is not Memoline's JSON format.
+ *
+ * The bytes are attacker-controlled and end up on screen and in exports, so the text is cleaned:
+ * strict UTF-8 only (anything else is binary and gives null), markup tags removed whole, every
+ * character outside the safe set dropped (this removes control characters, quotes, angle brackets,
+ * direction overrides and all non-ASCII), whitespace collapsed to single spaces, and the result
+ * capped at 64 characters. Returns null when nothing printable remains, and null for Memoline's
+ * own format, which `decodeMemoData` reads instead.
+ */
+export function decodeMemoText(memoData: Hex): string | null {
+  if (decodeMemoData(memoData) !== null) return null;
+  return plainMemoText(memoData);
+}
+
+/**
+ * The reference a ledger line shows for a memo: Memoline's own `ref` when the bytes are
+ * Memoline's format (null when that memo has no ref), otherwise the cleaned text another app wrote.
+ */
+export function memoReference(memoData: Hex): string | null {
+  const own = decodeMemoData(memoData);
+  if (own !== null) return own.ref ?? null;
+  return plainMemoText(memoData);
 }
