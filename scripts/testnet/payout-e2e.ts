@@ -290,7 +290,7 @@ async function main() {
   await run('T4', async () => ({
     pass: true,
     reason:
-      'covered by the app\'s CSV unit tests (duplicate recipient, duplicate reference, recipient equals sender): duplicates are DUPLICATE_RECIPIENT/DUPLICATE_REFERENCE warnings, not errors; no chain work needed here',
+      "covered by the app's CSV unit tests (duplicate recipient, duplicate reference, recipient equals sender): duplicates are DUPLICATE_RECIPIENT/DUPLICATE_REFERENCE warnings, not errors; no chain work needed here",
   }));
 
   // ---- T5: 120 rows → chunkRows [100, 20]; send chunk 0; prove idempotency via memo logs ----
