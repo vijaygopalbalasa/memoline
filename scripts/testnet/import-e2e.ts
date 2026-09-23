@@ -1,8 +1,8 @@
 /**
  * Testnet acceptance — import-e2e (Task 17). Proves the import side of `@memoline/ledger` against
  * live Arc Testnet: `fetchAddressLogs` → enrich (receipts + block times, bounded concurrency) →
- * `reconcileAddress`, then checks the invariants apps/web's import-service tests assert. Never
- * imports from apps/web.
+ * `reconcileAddress`, then checks the invariants the app's import service holds. Never
+ * imports app code.
  *
  * Assertions:
  *  - every entry's (txHash, logIndex) is unique (reconcileAddress dedupes correctly on live data);

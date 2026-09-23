@@ -1,7 +1,7 @@
 /**
  * Testnet acceptance — payout-e2e (Task 17, T1–T10). Proves the `@memoline/ledger` primitives
- * against live Arc Testnet, mirroring the invariants apps/web's run-service tests assert, without
- * touching Next code or a database. Never imports from apps/web.
+ * against live Arc Testnet, mirroring the invariants the app's run service holds, without
+ * touching app code or a database.
  *
  * T1  3 rows → one aggregate3 tx → reconcileReceipt gives 3 RECONCILED + 3 entries → runToCsv's
  *     footer total_paid/rows_paid tie out to the on-chain sum.
@@ -91,7 +91,7 @@ function breakChecksum(addr: Address): Address {
 }
 
 /** Builds one CSV/JSON export row from a reconciled row, following the same "only set what's
- * known" shape apps/web/src/services/runs.ts uses (required exactOptionalPropertyTypes discipline:
+ * known" shape the app's run service uses (required exactOptionalPropertyTypes discipline:
  * never assign `undefined` to an optional field). */
 function buildReportRow(
   runId: string,
@@ -290,7 +290,7 @@ async function main() {
   await run('T4', async () => ({
     pass: true,
     reason:
-      'covered by unit test (apps/web/test/csv.test.ts: "warnings: duplicate recipient, duplicate reference, recipient equals sender") — duplicates are DUPLICATE_RECIPIENT/DUPLICATE_REFERENCE warnings, not errors; no chain work needed here',
+      'covered by the app\'s CSV unit tests (duplicate recipient, duplicate reference, recipient equals sender): duplicates are DUPLICATE_RECIPIENT/DUPLICATE_REFERENCE warnings, not errors; no chain work needed here',
   }));
 
   // ---- T5: 120 rows → chunkRows [100, 20]; send chunk 0; prove idempotency via memo logs ----

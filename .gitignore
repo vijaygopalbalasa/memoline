@@ -23,7 +23,6 @@ scripts/testnet/.env
 scripts/testnet/out/
 scripts/mainnet/out/
 .deploy/
-apps/web/test/_scratch/
 private/
 
 # Local working notes: kept on the machine, not published.

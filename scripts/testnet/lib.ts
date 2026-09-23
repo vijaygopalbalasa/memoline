@@ -102,7 +102,7 @@ export function saveJson(path: string, data: unknown): void {
 export const explorer = (hash: Hex) => explorerTxUrl(CHAIN_ID, hash);
 
 /** Runs `fn` over `items` with at most `limit` calls in flight at once (same shape as
- * apps/web's services/imports.ts#mapLimit; duplicated here since scripts must not import Next code). */
+ * the app's own mapLimit; duplicated here since scripts must not import app code). */
 export async function mapLimit<T, R>(items: T[], limit: number, fn: (item: T) => Promise<R>): Promise<R[]> {
   const results: R[] = new Array(items.length);
   let next = 0;

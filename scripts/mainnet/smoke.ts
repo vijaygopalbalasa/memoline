@@ -35,7 +35,7 @@
  * pending run's fate (by hash if one was recorded, otherwise by querying Memo logs for the pending
  * run's exact memoIds) and reconciles whatever it finds instead. The file is only deleted once a
  * receipt has actually been fetched and reconciled — i.e. once the on-chain outcome is known for
- * certain. See DEPLOY.md §6 ("Resuming an interrupted smoke run") for the operator-facing version of
+ * certain. See the operator guide ("Resuming an interrupted smoke run") for the operator-facing version of
  * this. This is intentionally simpler than the web app's DB-backed chunk leases (`services/runs.ts`):
  * a single human running one transaction by hand needs a crash-safe file, not a lease server.
  */
