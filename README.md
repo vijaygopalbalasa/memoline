@@ -91,7 +91,9 @@ Verified end to end:
 - **485 unit/integration tests** across `packages/ledger` and `apps/web` (`pnpm test`), plus the same
   web suite on a real PostgreSQL 17 with connection contention (both run in `.github/workflows/ci.yml`).
 
-Not yet done: the first real payout through the mainnet app. Payment links and the ERC-8183 escrow slice
+- **First real payout on Arc mainnet (2026-09-23):** 3 payments, 3.00 USDC, one transaction from an ordinary wallet through the live app, reconciled to the unit: [proof page](https://memoline-one.vercel.app/tx/0x6459e57bbf838394c839c6590b73fb905b5892dfd2292353a696b2282f563eaf) and [explorer](https://explorer.arc.io/tx/0x6459e57bbf838394c839c6590b73fb905b5892dfd2292353a696b2282f563eaf).
+
+Payment links and the ERC-8183 escrow slice
 are future work, not part of this build.
 
 ## Known limits
