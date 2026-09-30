@@ -1,0 +1,11 @@
+Copyright (c) 2026 Vijaygopal Balasa. All rights reserved.
+
+The files in this repository are published so that anyone can see how Memoline uses the Arc
+network. No licence is granted to copy, modify, distribute or otherwise use them, in whole or in
+part, beyond what GitHub's Terms of Service allow for viewing them on GitHub.
+
+Memoline, its hosted application and their source code are proprietary and are not in this
+repository.
+
+The contract interfaces in arc/contracts.ts describe contracts published by Circle in
+circlefin/arc-node under the Apache License, Version 2.0.

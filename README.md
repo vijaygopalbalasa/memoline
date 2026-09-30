@@ -1,0 +1,58 @@
+# Memoline
+
+The money back office for businesses on [Arc](https://docs.arc.io). Pay many people in USDC or EURC from a
+spreadsheet, with an invoice reference on every payment. Keep books where every payment is counted once and
+every line ties back to Arc.
+
+Memoline never holds keys or funds. Your own wallet signs every payment, and money goes straight from your
+wallet to the people you pay.
+
+- **Live on Arc mainnet:** https://memoline-one.vercel.app
+- **Testnet:** https://memoline-testnet.vercel.app
+- **Demo video (2 min 35 s):** https://youtu.be/FqULZKNOnl8
+- **A real mainnet payout made with Memoline:** 3 payments, 3.00 USDC, one transaction, each payment with
+  its own reference. See the
+  [proof page](https://memoline-one.vercel.app/tx/0x6459e57bbf838394c839c6590b73fb905b5892dfd2292353a696b2282f563eaf)
+  or the
+  [explorer](https://explorer.arc.io/tx/0x6459e57bbf838394c839c6590b73fb905b5892dfd2292353a696b2282f563eaf).
+
+## How Memoline uses Arc
+
+- **Memo.** Each payment is sent as `Memo.memo(token, transfer(recipient, amount), memoId, reference)`. The
+  transfer and its reference happen in one call, and Arc emits a `Memo` event that ties them together, so a
+  payment can always be matched to its invoice.
+- **Multicall3From.** A whole list of payments goes out as one `aggregate3` transaction from the payer's own
+  wallet. Arc's CallFrom precompile keeps the payer as the sender of every transfer, which an ordinary
+  multicall cannot do, and the transaction pays every payment or none of them.
+- **USDC as gas.** Network fees are paid in USDC, and the books keep them apart from payments.
+- **One balance, two logs.** Arc logs every native USDC movement from a system address, and a transfer
+  through the USDC contract logs it a second time. Memoline counts each movement once.
+
+## What is in this repository
+
+Only the parts that show how Memoline talks to Arc:
+
+| File | What it shows |
+|---|---|
+| [`arc/contracts.ts`](./arc/contracts.ts) | The Arc contracts Memoline calls on mainnet and testnet, and the shape of each call. |
+| [`arc/pay-with-memos.ts`](./arc/pay-with-memos.ts) | How a list of payments becomes one Multicall3From transaction with a reference on every payment. |
+| [`arc/read-memos.ts`](./arc/read-memos.ts) | How such a transaction is read back into payments and their references. |
+
+The examples use [viem](https://viem.sh) 2. The application, its payout and reconciliation engine, and its
+test suite are private.
+
+## Status (30 September 2026)
+
+- **Live on Arc mainnet:** batch payouts in USDC and EURC from a spreadsheet, a check of the file before
+  signing, reconciling any Arc address into ledger lines, and a proof page for any transaction.
+- **Running on Arc testnet, coming to mainnet next:** payment links, invoices, monthly statements, Xero and
+  QuickBooks files, team roles and approvals, notifications and an API.
+- More than 1,100 automated tests.
+
+## Licence
+
+All rights reserved. See [LICENSE](./LICENSE).
+
+## Author
+
+Built by Vijaygopal Balasa ([github.com/vijaygopalbalasa](https://github.com/vijaygopalbalasa)).
