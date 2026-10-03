@@ -37,6 +37,7 @@ Only the parts that show how Memoline talks to Arc:
 | [`arc/contracts.ts`](./arc/contracts.ts) | The Arc contracts Memoline calls on mainnet and testnet, and the shape of each call. |
 | [`arc/pay-with-memos.ts`](./arc/pay-with-memos.ts) | How a list of payments becomes one Multicall3From transaction with a reference on every payment. |
 | [`arc/read-memos.ts`](./arc/read-memos.ts) | How such a transaction is read back into payments and their references. |
+| [`mcp/`](./mcp) | The Memoline MCP client: lets an AI agent read Arc transactions and addresses as ledger lines through Memoline's public API. MIT licensed. |
 
 The examples use [viem](https://viem.sh) 2. The application, its payout and reconciliation engine, and its
 test suite are private.
@@ -51,7 +52,9 @@ test suite are private.
 
 ## Licence
 
-All rights reserved. See [LICENSE](./LICENSE).
+The [`mcp/`](./mcp) folder is the Memoline MCP client (`@memoline/mcp`), which lets an AI agent read Arc as
+ledger lines through Memoline's public API. It is under its own MIT licence, in [`mcp/LICENSE`](./mcp/LICENSE).
+Everything else in this repository stays all rights reserved. See [LICENSE](./LICENSE).
 
 ## Author
 

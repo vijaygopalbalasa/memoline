@@ -1,0 +1,48 @@
+{
+  "name": "@memoline/mcp",
+  "version": "0.1.0",
+  "private": false,
+  "description": "An MCP server that reads Arc transactions and addresses as ledger lines through the Memoline API.",
+  "keywords": [
+    "mcp",
+    "arc",
+    "usdc",
+    "ledger"
+  ],
+  "homepage": "https://memoline-testnet.vercel.app/developers",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/vijaygopalbalasa/memoline.git",
+    "directory": "mcp"
+  },
+  "license": "MIT",
+  "type": "module",
+  "main": "dist/main.js",
+  "bin": {
+    "memoline-mcp": "dist/main.js"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "prepublishOnly": "npm run build",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "vitest run --passWithNoTests",
+    "start": "node dist/main.js"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "1.30.0",
+    "zod": "4.6.5"
+  },
+  "devDependencies": {
+    "@types/node": "24.13.6",
+    "typescript": "5.9.3",
+    "vitest": "5.0.1"
+  }
+}
