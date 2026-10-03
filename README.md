@@ -42,13 +42,21 @@ Only the parts that show how Memoline talks to Arc:
 The examples use [viem](https://viem.sh) 2. The application, its payout and reconciliation engine, and its
 test suite are private.
 
-## Status (30 September 2026)
+## Status (3 October 2026)
 
 - **Live on Arc mainnet:** batch payouts in USDC and EURC from a spreadsheet, a check of the file before
   signing, reconciling any Arc address into ledger lines, and a proof page for any transaction.
-- **Running on Arc testnet, coming to mainnet next:** payment links, invoices, monthly statements, Xero and
-  QuickBooks files, team roles and approvals, notifications and an API.
-- More than 1,100 automated tests.
+- **Running on Arc testnet, coming to mainnet next:** payment links and invoices, monthly statements and Xero
+  and QuickBooks files, a chart of accounts with booking rules, closing a month against Arc, the Overview, team
+  roles, approvals and a second person to confirm changes, payee checks and Circle's blocklist before signing,
+  screening against the US Treasury's sanctions list (OFAC), private payroll (one payee per transaction),
+  auditor links (a read-only view of chosen accounts and dates for an auditor), two-step sign-in,
+  notifications, and a keyed API that agents can use to prepare payouts.
+- **Memoline's fee, where a site charges it:** 0.25 USDC for each payment in a payout, paid in USDC in the same
+  transaction as the payments; a workspace's first 10 payments are free, once. The pricing page and the new
+  payout form say whether a site charges it.
+- **The MCP client** in [`mcp/`](./mcp), MIT licensed: not on npm yet, so build it from that folder.
+- More than 2,300 automated tests.
 
 ## Licence
 

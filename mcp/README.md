@@ -1,5 +1,8 @@
 # @memoline/mcp
 
+Not on npm yet: build it from this folder (`npm install`, `npm run build`, then `node dist/main.js`). Once it is
+published, `npx -y @memoline/mcp` runs it without the source.
+
 An MCP server that lets an AI agent read Arc as ledger lines through Memoline's public HTTP API.
 
 It offers four read-only tools. Three of them read public data and need no key. The fourth,
@@ -11,21 +14,26 @@ over https.
 
 ## Run it
 
-It needs Node 20 or later. Run it with npx:
+It needs Node 20 or later. It is not on npm yet, so build it from its source, the `mcp` folder of
+[github.com/vijaygopalbalasa/memoline](https://github.com/vijaygopalbalasa/memoline):
 
 ```sh
-npx -y @memoline/mcp
+git clone https://github.com/vijaygopalbalasa/memoline
+cd memoline/mcp
+npm install
+npm run build
+node dist/main.js
 ```
 
 The server speaks MCP over standard input and output, so your MCP client starts it for you. Add it to the
-client's configuration:
+client's configuration, with the whole path to the `dist/main.js` you built:
 
 ```json
 {
   "mcpServers": {
     "memoline": {
-      "command": "npx",
-      "args": ["-y", "@memoline/mcp"],
+      "command": "node",
+      "args": ["/path/to/memoline/mcp/dist/main.js"],
       "env": {
         "MEMOLINE_API_URL": "https://memoline-testnet.vercel.app",
         "MEMOLINE_API_KEY": "ml_test_..."
@@ -35,18 +43,19 @@ client's configuration:
 }
 ```
 
-Leave out `MEMOLINE_API_KEY` if you only use the public tools. You can also install it once with
+Leave out `MEMOLINE_API_KEY` if you only use the public tools.
+
+Once it is published to npm, `npx -y @memoline/mcp` runs it without the source: in the same configuration, set
+`"command"` to `"npx"` and `"args"` to `["-y", "@memoline/mcp"]`. You will also be able to install it once with
 `npm install -g @memoline/mcp` and run `memoline-mcp`.
 
 ## Settings
 
-`MEMOLINE_API_URL` says which Memoline to read from. Memoline's API runs on Arc testnet today, so for now
-the server reads Arc testnet when it is not set.
+`MEMOLINE_API_URL` says which Memoline to read from. When it is not set, the server reads the Arc testnet
+site.
 
-- Arc testnet: `https://memoline-testnet.vercel.app` (the default for now)
-- Arc mainnet: `https://memoline-one.vercel.app`, once Memoline's mainnet release is live
-
-To read Arc mainnet once that release is live, set `MEMOLINE_API_URL` to `https://memoline-one.vercel.app`.
+- Arc testnet: `https://memoline-testnet.vercel.app` (the default)
+- Arc mainnet: `https://memoline-one.vercel.app`, once that site answers `GET /api/v1/status`
 
 `MEMOLINE_API_KEY` is optional. It is a Memoline API key with the read scope, which a workspace admin makes in
 Settings, API keys. Keys for Arc testnet start with `ml_test_` and work only with the testnet URL. Keys for Arc
