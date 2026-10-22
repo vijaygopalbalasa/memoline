@@ -55,7 +55,7 @@ Once it is published to npm, `npx -y @memoline/mcp` runs it without the source: 
 site.
 
 - Arc testnet: `https://memoline-testnet.vercel.app` (the default)
-- Arc mainnet: `https://memoline-one.vercel.app`, once that site answers `GET /api/v1/status`
+- Arc mainnet: `https://memolinepay.com`
 
 `MEMOLINE_API_KEY` is optional. It is a Memoline API key with the read scope, which a workspace admin makes in
 Settings, API keys. Keys for Arc testnet start with `ml_test_` and work only with the testnet URL. Keys for Arc

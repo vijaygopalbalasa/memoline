@@ -4,6 +4,36 @@
  * a payment link. Each answers a plain summary for the model to read and the API's JSON beside it.
  * Nothing here throws: a refusal is a sentence.
  */
+
+/**
+ * The stablecoins Memoline reads on Arc (cycle 11a), in the registry's order. This package stands alone, so it keeps
+ * its own copy; a test holds it equal to the ledger's registry. Which of them a network lists, the API says.
+ */
+export const STABLECOINS = [
+  'USDC',
+  'EURC',
+  'AUDD',
+  'AUDF',
+  'BRLA',
+  'CADD',
+  'CHFAU',
+  'EURAU',
+  'GBPA',
+  'JPYC',
+  'KRW1',
+  'MXNB',
+  'QCAD',
+  'SEKAU',
+  'TRYB',
+  'ZARU',
+  'wARS',
+  'wBRL',
+  'wCLP',
+  'wCOP',
+  'wMXN',
+  'wPEN',
+] as const;
+export type Stablecoin = (typeof STABLECOINS)[number];
 export type ToolResult = { ok: true; text: string; data: unknown } | { ok: false; text: string };
 
 type Line = {
@@ -151,14 +181,17 @@ export function memolineTools(opts: { baseUrl: string; fetch?: typeof fetch; api
      * so it is left out of each. */
     async statement(p: {
       account: string;
-      token: 'USDC' | 'EURC';
+      token: Stablecoin;
       from: number;
       to: number;
     }): Promise<ToolResult> {
       if (!ADDRESS.test(p.account))
         return { ok: false, text: 'An account is an Arc address: 0x and 40 hex characters.' };
-      if (p.token !== 'USDC' && p.token !== 'EURC')
-        return { ok: false, text: 'The currency is USDC or EURC.' };
+      if (!(STABLECOINS as readonly string[]).includes(p.token))
+        return {
+          ok: false,
+          text: 'The currency is a stablecoin Memoline reads, such as USDC, EURC or MXNB.',
+        };
       if (!Number.isInteger(p.from) || !Number.isInteger(p.to) || p.from < 0 || p.to < 0)
         return { ok: false, text: 'from and to are times in seconds since 1970.' };
       if (p.from > p.to)
@@ -224,10 +257,23 @@ export function memolineTools(opts: { baseUrl: string; fetch?: typeof fetch; api
         return { ok: false, text: 'The answer was not what the Memoline API returns; nothing was read.' };
       }
       const token = String(l.token);
-      const asks = l.amount === null ? `asks any amount of ${token}` : `asks ${l.amount} ${token}`;
+      // An invoice priced in another currency (cycle 10d-1): its price, paid in the token at a quote.
+      const price = (l.price ?? null) as {
+        currency: string;
+        amount: string;
+        paid: string;
+        remaining: string;
+      } | null;
+      const asks = price
+        ? `asks ${price.amount} ${price.currency}, paid in ${token} at a quote`
+        : l.amount === null
+          ? `asks any amount of ${token}`
+          : `asks ${l.amount} ${token}`;
       const lines = [
         `${network(l.chainId)} payment link ${l.id} ${asks} to ${l.payee} for ${l.reference}${l.description ? ` (${l.description})` : ''}.`,
-        `Status: ${String(l.status).replace('_', ' ')}; ${l.paid} ${token} paid${l.remaining !== null && l.remaining !== undefined ? `, ${l.remaining} ${token} left` : ''}.`,
+        price
+          ? `Status: ${String(l.status).replace('_', ' ')}; ${price.paid} ${price.currency} paid, ${price.remaining} ${price.currency} left.`
+          : `Status: ${String(l.status).replace('_', ' ')}; ${l.paid} ${token} paid${l.remaining !== null && l.remaining !== undefined ? `, ${l.remaining} ${token} left` : ''}.`,
       ];
       const pay = r.body.pay as {
         to: string;
@@ -236,12 +282,27 @@ export function memolineTools(opts: { baseUrl: string; fetch?: typeof fetch; api
         amount: string;
         chainId: number;
       } | null;
+      const quote = (r.body.quote ?? null) as {
+        price: string;
+        currency: string;
+        rate: string;
+        per: string;
+        validUntil: number;
+      } | null;
+      const quoted = quote
+        ? ` (the quote for ${quote.price} ${quote.currency} at ${quote.rate} ${quote.currency} per ${quote.per}, until ${new Date(quote.validUntil * 1000).toISOString()})`
+        : '';
       if (!r.body.payableNow) lines.push(String(r.body.reason ?? 'It cannot be paid now.'));
       else if (pay) {
         lines.push(
-          `To pay ${pay.amount} ${token}, send to ${pay.to} on chain ${pay.chainId} with value 0 and data ${pay.data}, from an ordinary wallet (not a smart-contract wallet), then post the transaction hash to /api/v1/links/${l.id}/confirm.`,
+          `To pay ${pay.amount} ${token}${quoted}, send to ${pay.to} on chain ${pay.chainId} with value 0 and data ${pay.data}, from an ordinary wallet (not a smart-contract wallet), then post the transaction hash to /api/v1/links/${l.id}/confirm.`,
         );
-      } else lines.push('It takes any amount: ask again with the amount to get the transaction to sign.');
+      } else if (price)
+        lines.push(
+          `It is priced in ${price.currency}: POST /api/v1/links/${l.id}/quote for the amount and the transaction to sign.`,
+        );
+      else lines.push('It takes any amount: ask again with the amount to get the transaction to sign.');
+      if (price) lines.push('Rates By Exchange Rate API (https://www.exchangerate-api.com).');
       return { ok: true, text: lines.join('\n'), data: r.body };
     },
   };

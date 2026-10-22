@@ -1,6 +1,6 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
-import type { MemolineTools, ToolResult } from './tools.ts';
+import { type MemolineTools, STABLECOINS, type ToolResult } from './tools.ts';
 
 const answer = (r: ToolResult) =>
   r.ok
@@ -68,7 +68,9 @@ export function createServer(tools: MemolineTools): McpServer {
         "Reads one of the workspace's accounts over a period as a statement rolled up by counterparty: money in and out, gas, the balances Arc reports at the period's edges and whether it closes, and one line per counterparty and direction with the count of payments. Needs MEMOLINE_API_KEY (a key with the read scope). Read-only.",
       inputSchema: {
         account: z.string().describe('An account of the workspace, 0x and 40 hex characters.'),
-        token: z.enum(['USDC', 'EURC']).describe('The currency.'),
+        token: z
+          .enum(STABLECOINS)
+          .describe('The stablecoin, such as USDC, EURC or MXNB; the API says which ones its network reads.'),
         from: z.number().int().describe('The start of the period, seconds since 1970.'),
         to: z.number().int().describe('The end of the period, seconds since 1970.'),
       },

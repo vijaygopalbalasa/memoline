@@ -9,7 +9,7 @@
     "usdc",
     "ledger"
   ],
-  "homepage": "https://memoline-testnet.vercel.app/developers",
+  "homepage": "https://memolinepay.com/developers",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/vijaygopalbalasa/memoline.git",
@@ -37,7 +37,7 @@
     "start": "node dist/main.js"
   },
   "dependencies": {
-    "@modelcontextprotocol/sdk": "1.30.0",
+    "@modelcontextprotocol/sdk": "1.32.1",
     "zod": "4.6.5"
   },
   "devDependencies": {

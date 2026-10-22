@@ -1,5 +1,5 @@
-/** Memoline's API runs on Arc testnet today, so the server reads testnet when MEMOLINE_API_URL is not set.
- * Once Memoline's mainnet release is live, set MEMOLINE_API_URL to https://memoline-one.vercel.app. */
+/** The server reads Memoline on Arc testnet when MEMOLINE_API_URL is not set. For Arc mainnet, set MEMOLINE_API_URL
+ * to https://memolinepay.com. */
 export const DEFAULT_API_URL = 'https://memoline-testnet.vercel.app';
 
 /** Which Memoline to read from: the one MEMOLINE_API_URL names, or the default when it is not set or empty. */
